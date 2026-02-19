@@ -1353,7 +1353,6 @@ void loop() {
                 if (newClient) {
                     rtspClient = newClient;
                     rtspClient.setNoDelay(true);
-                    drainRtspReceiveBuffer(rtspClient);
                     rtspParseBufferPos = 0;
                     lastRTSPActivity = millis();
                     lastRtspClientConnectMs = millis();
