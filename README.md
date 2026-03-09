@@ -85,6 +85,7 @@ lib_deps =
 
 ## Acknowledgments
 
+This project is largely based on [birdnetgo-esp32-rtsp-mic](https://github.com/Sukecz/birdnetgo-esp32-rtsp-mic) by [@Sukecz](https://github.com/Sukecz) — thank you for the excellent foundation!
+
 - M5Stack for the Atom Echo hardware
-- BirdNET-Go community
-- Original RTSP microphone implementation
+- [BirdNET-Go](https://github.com/tphakala/birdnet-go) community

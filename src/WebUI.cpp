@@ -165,7 +165,7 @@ static String htmlIndex() {
     h += ip;
     h += F(
         ":8554/audio</a></div></div>"
-        "<div class='lang'><a href='https://github.com/Sukecz/birdnetgo-esp32-rtsp-mic' target='_blank' class='gh'>GitHub</a>Lang: <select id='langSel'><option value='en'>English</option><option value='cs'>Čeština</option></select></div></div></div>"
+        "<div class='lang'><a href='https://github.com/stedrow/birdnetgo-m5stack-atom-echo-rtsp-mic' target='_blank' class='gh'>GitHub</a>Lang: <select id='langSel'><option value='en'>English</option><option value='cs'>Čeština</option></select></div></div></div>"
         "<div class='row'>"
         "<div class='card'><h2 id='t_status'>Status</h2><table>"
         "<tr><td class='k' id='t_ip'>IP Address</td><td class='v' id='ip'></td></tr>"
