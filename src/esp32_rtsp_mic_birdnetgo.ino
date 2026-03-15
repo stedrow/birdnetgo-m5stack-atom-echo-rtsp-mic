@@ -97,6 +97,17 @@ bool audioClippedLastBlock = false; // clipping occurred in last processed block
 uint16_t peakHoldAbs16 = 0;       // peak hold (recent window)
 unsigned long peakHoldUntilMs = 0; // when to clear hold
 
+// -- I2S raw capture diagnostics (helps verify PDM communication/wiring)
+volatile uint32_t i2sReadOkCount = 0;
+volatile uint32_t i2sReadErrCount = 0;
+volatile uint32_t i2sReadZeroCount = 0;
+volatile uint16_t i2sLastSamplesRead = 0;
+volatile int16_t i2sLastRawMin = 0;
+volatile int16_t i2sLastRawMax = 0;
+volatile uint16_t i2sLastRawPeakAbs = 0;
+volatile uint16_t i2sLastRawRms = 0;
+volatile uint16_t i2sLastRawZeroPct = 0;
+
 // -- LED mode: 0=off, 1=static, 2=level
 uint8_t ledMode = 1;  // Default: static purple during streaming
 
@@ -739,8 +750,9 @@ void audioCaptureTask(void* parameter) {
 
         // Periodic stats (every 30s) — Serial.printf only, no heap alloc
         if (millis() - lastStatsLog > 30000) {
-            Serial.printf("[Core1] Sent=%u I2Serr=%u Clip=%lu AGC=%.2f\n",
-                         packetCount, i2sErrors, audioClipCount, localAgcMult);
+            Serial.printf("[Core1] Sent=%u I2Serr=%u Clip=%lu AGC=%.2f RawPeak=%u RawRMS=%u RawMin=%d RawMax=%d Z=%u%%\n",
+                         packetCount, i2sErrors, audioClipCount, localAgcMult,
+                         i2sLastRawPeakAbs, i2sLastRawRms, i2sLastRawMin, i2sLastRawMax, i2sLastRawZeroPct);
             lastStatsLog = millis();
         }
 
@@ -753,17 +765,22 @@ void audioCaptureTask(void* parameter) {
             if (result != ESP_OK) {
                 consecutiveErrors++;
                 i2sErrors++;
+                i2sReadErrCount++;
                 if (consecutiveErrors >= MAX_ERRORS) {
                     Serial.println("[Core1] Too many I2S errors, pausing");
                     vTaskDelay(pdMS_TO_TICKS(100));
                     consecutiveErrors = 0;
                 }
+            } else {
+                i2sReadZeroCount++;
             }
             continue;
         }
 
         consecutiveErrors = 0;
+        i2sReadOkCount++;
         uint16_t samplesRead = bytesRead / sizeof(int16_t);
+        i2sLastSamplesRead = samplesRead;
 
         // Update HPF coefficients if changed
         if (highpassEnabled && (localHpfConfigSampleRate != currentSampleRate ||
@@ -784,8 +801,23 @@ void audioCaptureTask(void* parameter) {
         float peakAbs = 0.0f;
         float sumSquares = 0.0f;
 
+        // Raw I2S diagnostics before DSP (used to detect dead/flat/stuck mic input)
+        int16_t rawMin = INT16_MAX;
+        int16_t rawMax = INT16_MIN;
+        uint16_t rawPeakAbs = 0;
+        uint32_t rawZeroCount = 0;
+        float rawSumSquares = 0.0f;
+
         for (int i = 0; i < samplesRead; i++) {
-            float sample = (float)(captureBuffer[i] >> i2sShiftBits);
+            int16_t raw = captureBuffer[i];
+            if (raw < rawMin) rawMin = raw;
+            if (raw > rawMax) rawMax = raw;
+            uint16_t rawAbs = (raw < 0) ? (uint16_t)(-raw) : (uint16_t)raw;
+            if (rawAbs > rawPeakAbs) rawPeakAbs = rawAbs;
+            if (raw == 0) rawZeroCount++;
+            rawSumSquares += (float)raw * (float)raw;
+
+            float sample = (float)(raw >> i2sShiftBits);
 
             if (highpassEnabled) {
                 sample = localHpf.process(sample);
@@ -800,6 +832,20 @@ void audioCaptureTask(void* parameter) {
             if (amplified > 32767.0f) amplified = 32767.0f;
             if (amplified < -32768.0f) amplified = -32768.0f;
             outputBuffer[i] = (int16_t)amplified;
+        }
+
+        // Publish raw capture diagnostics for UI/API
+        i2sLastRawMin = rawMin;
+        i2sLastRawMax = rawMax;
+        i2sLastRawPeakAbs = rawPeakAbs;
+        if (samplesRead > 0) {
+            float rawRms = sqrtf(rawSumSquares / (float)samplesRead);
+            if (rawRms > 65535.0f) rawRms = 65535.0f;
+            i2sLastRawRms = (uint16_t)rawRms;
+            i2sLastRawZeroPct = (uint16_t)((rawZeroCount * 100UL) / samplesRead);
+        } else {
+            i2sLastRawRms = 0;
+            i2sLastRawZeroPct = 100;
         }
 
         // AGC: adjust multiplier based on RMS

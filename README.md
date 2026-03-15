@@ -63,6 +63,23 @@ ffplay -rtsp_transport tcp rtsp://atoms3mic.local:8554/audio
 | Orange | Signal hot, >70% (level mode) |
 | Red | Clipping or thermal protection |
 
+## Mic Link Diagnostic (no audio case)
+
+If the stream is silent, you can verify whether the ESP32 is actually receiving changing samples from the PDM mic.
+
+```bash
+curl -s http://atoms3mic.local/api/audio_status
+```
+
+Check these fields in the JSON:
+- `i2s_link_ok`: `true` means raw samples are changing.
+- `i2s_raw_peak` / `i2s_raw_rms`: should be above near-zero when speaking near the mic.
+- `i2s_raw_min` and `i2s_raw_max`: should not be identical for long.
+- `i2s_raw_zero_pct`: very high values (e.g. ~100%) suggest no real data.
+- `i2s_hint`: quick wiring hint if signal looks flat.
+
+For Unit PDM wiring use **CLK=G1** and **DATA=G2**, plus GND and 3V3.
+
 ## Building
 
 ```bash
