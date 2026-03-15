@@ -11,7 +11,7 @@ A high-quality RTSP audio streaming server for the **AtomS3 Lite + Unit Mini PDM
 ## Features
 
 - **Dual-core architecture** — Core 1 handles full audio pipeline, Core 0 handles Web UI and RTSP negotiation
-- **mDNS discovery** — `atoms3mic.local`, no IP needed
+- **mDNS discovery** — `atoms3mic.local` (default; use the hostname shown in boot logs if customized), no IP needed
 - **Web UI** — configure settings, view signal levels, logs, and diagnostics
 - **AGC** — automatic gain control for varying bird distances
 - **High-pass filter** — 2nd-order Butterworth (default 300Hz) removes wind/traffic
