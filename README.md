@@ -80,6 +80,35 @@ Check these fields in the JSON:
 - `i2s_hint`: quick wiring hint if signal looks flat.
 - If VLC shows `No route to host`, this is a network path issue (not microphone capture): verify your computer is on the same subnet as the device IP, disable client/AP isolation on the Wi‑Fi, and confirm `rtsp://<device-ip>:8554/audio` is reachable from the same VLAN.
 
+Quick network-layer checks from the same client machine:
+
+```bash
+ping -c 3 <device-ip>
+ip route get <device-ip>
+nc -vz <device-ip> 8554
+curl -s http://<device-ip>/api/audio_status
+```
+
+Expected behavior:
+- `ping` should return replies.
+- `ip route get` should show the expected interface/subnet (no unexpected VPN route).
+- `nc` should report port 8554 reachable.
+- `audio_status` should return JSON with increasing `i2s_reads_ok`.
+
+If `ping` fails or `nc` says `No route to host`, fix routing/VLAN/AP isolation/firewall first. RTSP negotiation cannot start until plain TCP connectivity to `<device-ip>:8554` works.
+
+If all network checks pass but audio still sounds nearly silent:
+- Use the Web UI meter (`peak_dbfs`) while speaking/clapping near the mic.
+- Around `-45 dBFS` to `-55 dBFS` with visible sample movement means capture is alive but too quiet for practical decoding.
+- Increase manual gain first (for example 3.0x → 8.0x → 12.0x) and re-check `peak_dbfs`.
+- Then enable AGC so distant calls are lifted automatically; watch `agc_multiplier` and `effective_gain` in `/api/status`.
+- Keep high-pass filter enabled for outdoor noise, but temporarily disable HPF once to compare whether calls become more audible.
+- Target typical speech/claps around `-20 dBFS` to `-10 dBFS` without frequent clipping.
+
+Interpretation tip for raw counters:
+- A non-zero `i2s_raw_rms` with close `i2s_raw_min`/`i2s_raw_max` can indicate strong DC bias and low AC amplitude.
+- This is a signal-conditioning issue (gain/AGC/HPF tuning), not a transport/network failure.
+
 For Unit PDM wiring use **CLK=G1** and **DATA=G2**, plus GND and 3V3.
 
 ## Building

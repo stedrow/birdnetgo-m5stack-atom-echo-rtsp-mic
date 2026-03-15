@@ -103,6 +103,15 @@ Some RTSP clients (VLC) probe the server on first connect. The second connection
 3. Enable auto recovery
 4. Reduce WiFi TX power if causing interference
 
+### Reachable RTSP but Nearly Silent Audio
+If the client can reach `:8554` and `/api/audio_status` is updating, transport is healthy.
+Focus on signal conditioning:
+1. Check `peak_dbfs` in Web UI while speaking/clapping near the mic.
+2. If levels stay around `-45 dBFS` to `-55 dBFS`, raise manual gain and re-test.
+3. Enable AGC and verify `agc_multiplier`/`effective_gain` increase when quiet.
+4. Keep HPF enabled for wind/rumble, but briefly disable once as an A/B test.
+5. Aim for typical peaks around `-20 dBFS` to `-10 dBFS` without constant clipping.
+
 ## Version History
 
 ### v2.3.0

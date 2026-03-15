@@ -64,6 +64,7 @@ extern volatile int16_t i2sLastRawMax;
 extern volatile uint16_t i2sLastRawPeakAbs;
 extern volatile uint16_t i2sLastRawRms;
 extern volatile uint16_t i2sLastRawZeroPct;
+extern volatile bool i2sLikelyUnsignedPcm;
 
 // Local helper: snap requested Wi‑Fi TX power (dBm) to nearest supported step
 static float snapWifiTxDbm(float dbm) {
@@ -372,9 +373,18 @@ static void httpAudioStatus() {
     json += "\"i2s_raw_peak\":" + String(i2sLastRawPeakAbs) + ",";
     json += "\"i2s_raw_rms\":" + String(i2sLastRawRms) + ",";
     json += "\"i2s_raw_zero_pct\":" + String(i2sLastRawZeroPct) + ",";
+    json += "\"i2s_unsigned_pcm\":" + String(i2sLikelyUnsignedPcm?"true":"false") + ",";
     bool likelyFlatline = (i2sLastRawPeakAbs < 8) || ((i2sLastRawMin == i2sLastRawMax) && i2sLastSamplesRead > 0) || (i2sLastRawZeroPct > 98);
     json += "\"i2s_link_ok\":" + String(likelyFlatline?"false":"true") + ",";
-    json += "\"i2s_hint\":\"" + jsonEscape(likelyFlatline ? "Mic data looks flat/near-zero. Check CLK/DATA wiring, GND, and 3V3. For Unit PDM use CLK=G1 and DATA=G2." : "Raw mic signal is changing; I2S link appears active.") + "\"";
+    String i2sHint;
+    if (likelyFlatline) {
+        i2sHint = "Mic data looks flat/near-zero. Check CLK/DATA wiring, GND, and 3V3. For Unit PDM use CLK=G1 and DATA=G2.";
+    } else if (i2sLikelyUnsignedPcm) {
+        i2sHint = "Mic signal is active (unsigned PCM detected). Firmware auto-normalizes this format before streaming.";
+    } else {
+        i2sHint = "Raw mic signal is changing; I2S link appears active.";
+    }
+    json += "\"i2s_hint\":\"" + jsonEscape(i2sHint) + "\"";
     json += "}";
     apiSendJSON(json);
 }

@@ -25,7 +25,7 @@ SemaphoreHandle_t taskExitSemaphore = NULL;  // confirmed task exit
 volatile bool core1OwnsLED = false;          // LED ownership flag
 
 // ================== SETTINGS (ESP32 RTSP Mic for BirdNET-Go) ==================
-#define FW_VERSION "2.3.0"
+#define FW_VERSION "2.3.1"
 // Expose FW version as a global C string for WebUI/API
 const char* FW_VERSION_STR = FW_VERSION;
 
@@ -107,6 +107,7 @@ volatile int16_t i2sLastRawMax = 0;
 volatile uint16_t i2sLastRawPeakAbs = 0;
 volatile uint16_t i2sLastRawRms = 0;
 volatile uint16_t i2sLastRawZeroPct = 0;
+volatile bool i2sLikelyUnsignedPcm = false;
 
 // -- LED mode: 0=off, 1=static, 2=level
 uint8_t ledMode = 1;  // Default: static purple during streaming
@@ -828,6 +829,7 @@ void audioCaptureTask(void* parameter) {
         uint32_t rawZeroCount = 0;
         float rawSumSquares = 0.0f;
 
+        // First pass: collect raw stats for diagnostics and format detection.
         for (int i = 0; i < samplesRead; i++) {
             int16_t raw = captureBuffer[i];
             if (raw < rawMin) rawMin = raw;
@@ -836,8 +838,26 @@ void audioCaptureTask(void* parameter) {
             if (rawAbs > rawPeakAbs) rawPeakAbs = rawAbs;
             if (raw == 0) rawZeroCount++;
             rawSumSquares += (float)raw * (float)raw;
+        }
 
-            float sample = (float)(raw >> i2sShiftBits);
+        // Some PDM front-ends return unsigned low-amplitude PCM (e.g. around 1024)
+        // instead of signed 16-bit centered at 0. Detect and normalize per block.
+        bool likelyUnsignedPdm = (rawMin >= 0 && rawMax <= 4095);
+        i2sLikelyUnsignedPcm = likelyUnsignedPdm;
+        float pdmCenter = 0.0f;
+        float pdmScale = 1.0f;
+        if (likelyUnsignedPdm) {
+            pdmCenter = (rawMax > 2047) ? 2048.0f : 1024.0f;
+            pdmScale = (rawMax > 2047) ? 16.0f : 32.0f;
+        }
+
+        // Second pass: DSP and output generation.
+        for (int i = 0; i < samplesRead; i++) {
+            int16_t raw = captureBuffer[i];
+
+            float sample = likelyUnsignedPdm
+                ? ((float)raw - pdmCenter) * pdmScale
+                : (float)(raw >> i2sShiftBits);
 
             if (highpassEnabled) {
                 sample = localHpf.process(sample);
