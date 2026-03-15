@@ -430,7 +430,11 @@ void checkPerformance() {
 
 // WiFi health check
 void checkWiFiHealth() {
-    if (WiFi.status() != WL_CONNECTED) {
+    static bool prevConnected = false;
+    static IPAddress prevIp(0, 0, 0, 0);
+
+    bool connected = (WiFi.status() == WL_CONNECTED);
+    if (!connected) {
         // Stop streaming before reconnecting — no point sending RTP into a dead radio
         if (isStreaming) {
             requestStreamStop("WiFi disconnect");
@@ -438,14 +442,32 @@ void checkWiFiHealth() {
         }
         simplePrintln("WiFi disconnected! Reconnecting...");
         WiFi.reconnect();
+    } else {
+        IPAddress ip = WiFi.localIP();
+        // On reconnect/IP change, make sure RTSP server socket is listening on new interface.
+        if (!prevConnected || ip != prevIp) {
+            simplePrintln("WiFi up: IP=" + ip.toString() + " GW=" + WiFi.gatewayIP().toString());
+            if (rtspServerEnabled) {
+                rtspServer.stop();
+                delay(20);
+                rtspServer.begin();
+                rtspServer.setNoDelay(true);
+                simplePrintln("RTSP server rebound on :8554");
+            }
+        }
+        prevIp = ip;
     }
+
+    prevConnected = connected;
 
     // Re-apply TX power WITHOUT logging (prevent periodic log spam)
     applyWifiTxPower(false);
 
-    int32_t rssi = WiFi.RSSI();
-    if (rssi < -85) {
-        simplePrintln("WARNING: Weak WiFi signal: " + String(rssi) + " dBm");
+    if (connected) {
+        int32_t rssi = WiFi.RSSI();
+        if (rssi < -85) {
+            simplePrintln("WARNING: Weak WiFi signal: " + String(rssi) + " dBm");
+        }
     }
 }
 

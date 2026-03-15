@@ -78,6 +78,7 @@ Check these fields in the JSON:
 - `i2s_raw_min` and `i2s_raw_max`: should not be identical for long.
 - `i2s_raw_zero_pct`: very high values (e.g. ~100%) suggest no real data.
 - `i2s_hint`: quick wiring hint if signal looks flat.
+- If VLC shows `No route to host`, this is a network path issue (not microphone capture): verify your computer is on the same subnet as the device IP, disable client/AP isolation on the Wi‑Fi, and confirm `rtsp://<device-ip>:8554/audio` is reachable from the same VLAN.
 
 For Unit PDM wiring use **CLK=G1** and **DATA=G2**, plus GND and 3V3.
 

@@ -320,6 +320,9 @@ static void httpStatus() {
     String json = "{";
     json += "\"fw_version\":\"" + String(FW_VERSION_STR) + "\",";
     json += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
+    json += "\"gateway\":\"" + WiFi.gatewayIP().toString() + "\",";
+    json += "\"subnet\":\"" + WiFi.subnetMask().toString() + "\",";
+    json += "\"wifi_connected\":" + String(WiFi.status()==WL_CONNECTED?"true":"false") + ",";
     json += "\"wifi_rssi\":" + String(WiFi.RSSI()) + ",";
     json += "\"wifi_tx_dbm\":" + String(wifiPowerLevelToDbm(currentWifiPowerLevel),1) + ",";
     json += "\"free_heap_kb\":" + String(ESP.getFreeHeap()/1024) + ",";
