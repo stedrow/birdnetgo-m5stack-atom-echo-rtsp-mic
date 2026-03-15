@@ -34,6 +34,7 @@ const char* FW_VERSION_STR = FW_VERSION;
 #define DEFAULT_GAIN_FACTOR 3.0f
 #define DEFAULT_BUFFER_SIZE 1024   // 64ms @ 16kHz - good balance for BirdNET-Go
 #define DEFAULT_WIFI_TX_DBM 19.5f  // Default WiFi TX power in dBm
+#define DEFAULT_NETWORK_HOSTNAME "atoms3mic"
 // High-pass filter defaults (to remove low-frequency rumble)
 #define DEFAULT_HPF_ENABLED true
 #define DEFAULT_HPF_CUTOFF_HZ 300
@@ -61,6 +62,7 @@ inline void setStatusLed(const CRGB& color) {
 // -- Servers
 WiFiServer rtspServer(8554);
 WiFiClient rtspClient;
+String networkHostname = DEFAULT_NETWORK_HOSTNAME;
 
 // -- RTSP Streaming
 String rtspSessionId = "";
@@ -1462,6 +1464,8 @@ void setup() {
     Serial.println("Initializing WiFi...");
     WiFi.setSleep(false);
 
+    WiFi.setHostname(DEFAULT_NETWORK_HOSTNAME);
+
     WiFiManager wm;
     wm.setConnectTimeout(60);
     wm.setConfigPortalTimeout(180);
@@ -1493,11 +1497,16 @@ void setup() {
     // Apply configured WiFi TX power after connect (logs once on change)
     applyWifiTxPower(true);
 
-    // mDNS: allows rtsp://atoms3mic.local:8554/audio
-    if (MDNS.begin("atoms3mic")) {
+    const char* wifiHostname = WiFi.getHostname();
+    if (wifiHostname && wifiHostname[0] != '\0') {
+        networkHostname = String(wifiHostname);
+    }
+
+    // mDNS: allows rtsp://<hostname>.local:8554/audio
+    if (MDNS.begin(networkHostname.c_str())) {
         MDNS.addService("rtsp", "tcp", 8554);
         MDNS.addService("http", "tcp", 80);
-        simplePrintln("mDNS: atoms3mic.local");
+        simplePrintln("mDNS: " + networkHostname + ".local");
     }
 
     Serial.println("Setting up I2S driver...");
@@ -1554,7 +1563,7 @@ void setup() {
     if (!overheatLatched) {
         simplePrintln("RTSP server ready on port 8554");
         simplePrintln("RTSP URL: rtsp://" + WiFi.localIP().toString() + ":8554/audio");
-        simplePrintln("RTSP URL: rtsp://atoms3mic.local:8554/audio");
+        simplePrintln("RTSP URL: rtsp://" + networkHostname + ".local:8554/audio");
         // Set LED to blue when ready (green reserved for level indicator)
         if (ledMode > 0) setStatusLed(CRGB(0, 0, 128));
         else setStatusLed(CRGB(0, 0, 0));

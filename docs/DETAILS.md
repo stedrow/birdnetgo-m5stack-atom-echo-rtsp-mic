@@ -137,7 +137,7 @@ Focus on signal conditioning:
 - Lock-free pointer handoff (removed mutex)
 - Fixed first-connection race condition (VLC probe)
 - Fixed `i2s_read` blocking, Core 1 heap contention
-- mDNS discovery (`atomecho.local`)
+- mDNS discovery (`atoms3mic.local`)
 - Automatic Gain Control (AGC)
 - LED audio level indicator
 - RTSP idle timeout (60s)
