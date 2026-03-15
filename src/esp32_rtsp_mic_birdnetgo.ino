@@ -741,12 +741,10 @@ void audioCaptureTask(void* parameter) {
             continue;
         }
 
-        if (!isStreaming || !streamClient) {
-            vTaskDelay(pdMS_TO_TICKS(10));
-            continue;
-        }
-
+        // Keep I2S capture running even when no RTSP client is active,
+        // so /api/audio_status can show live raw-mic diagnostics.
         WiFiClient* client = streamClient;
+        bool streamActive = (isStreaming && client != NULL);
 
         // Periodic stats (every 30s) — Serial.printf only, no heap alloc
         if (millis() - lastStatsLog > 30000) {
@@ -887,8 +885,8 @@ void audioCaptureTask(void* parameter) {
             peakHoldAbs16 = 0;
         }
 
-        // LED update (throttled to ~10 Hz)
-        if (millis() - lastLedUpdate > 100) {
+        // LED update (throttled to ~10 Hz) only while actively streaming.
+        if (streamActive && millis() - lastLedUpdate > 100) {
             if (ledMode == 2) {
                 // Level mode: color-coded audio level
                 float pct = peakAbs / 32767.0f;
@@ -913,14 +911,16 @@ void audioCaptureTask(void* parameter) {
             lastLedUpdate = millis();
         }
 
-        // Send RTP packet
-        sendRTPPacket(*client, outputBuffer, samplesRead);
-        packetCount++;
+        if (streamActive) {
+            // Send RTP packet
+            sendRTPPacket(*client, outputBuffer, samplesRead);
+            packetCount++;
+        }
 
         // Process incoming RTSP commands during streaming (~every 200ms)
         // Keeps all socket I/O on Core 1 during streaming
         static unsigned long lastRtspCheck = 0;
-        if (client && isStreaming && (millis() - lastRtspCheck > 200)) {
+        if (streamActive && (millis() - lastRtspCheck > 200)) {
             lastRtspCheck = millis();
             if (client->available() > 0) {
                 char rtspBuf[512];
@@ -1414,8 +1414,9 @@ void setup() {
     setup_i2s_driver();
     Serial.println("I2S driver ready");
 
-    // Audio pipeline task will be created when RTSP streaming begins (on PLAY command)
-    Serial.println("Dual-core audio ready (Core 1 pipeline will start on RTSP PLAY)");
+    // Start Core 1 audio pipeline now so raw I2S diagnostics are available even before PLAY.
+    startAudioCaptureTask();
+    Serial.println("Dual-core audio ready (Core 1 pipeline running for always-on diagnostics)");
 
     Serial.println("Updating highpass coefficients...");
     updateHighpassCoeffs();

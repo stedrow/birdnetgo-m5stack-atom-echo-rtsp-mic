@@ -65,13 +65,14 @@ ffplay -rtsp_transport tcp rtsp://atoms3mic.local:8554/audio
 
 ## Mic Link Diagnostic (no audio case)
 
-If the stream is silent, you can verify whether the ESP32 is actually receiving changing samples from the PDM mic.
+If the stream is silent, you can verify whether the ESP32 is actually receiving changing samples from the PDM mic. These counters are updated continuously after boot (you do not need an active RTSP PLAY session).
 
 ```bash
 curl -s http://atoms3mic.local/api/audio_status
 ```
 
 Check these fields in the JSON:
+- `i2s_reads_ok`: should increase steadily; if it stays `0`, firmware is not capturing samples yet (or running an older build).
 - `i2s_link_ok`: `true` means raw samples are changing.
 - `i2s_raw_peak` / `i2s_raw_rms`: should be above near-zero when speaking near the mic.
 - `i2s_raw_min` and `i2s_raw_max`: should not be identical for long.
