@@ -1,6 +1,6 @@
-# M5 Atom RTSP Microphone for BirdNET-Go
+# AtomS3 Lite + Unit Mini PDM — RTSP Microphone for BirdNET-Go
 
-A high-quality RTSP audio streaming server for **M5 Atom-class ESP32 devices**, currently tuned for the **AtomS3 Lite + Unit Mini PDM** signal path and documented with the changes needed for Atom Echo-style codec inputs, streaming live audio to [BirdNET-Go](https://github.com/tphakala/birdnet-go) or any RTSP-compatible client.
+A high-quality RTSP audio streaming server for the **AtomS3 Lite + Unit Mini PDM**, streaming live audio to [BirdNET-Go](https://github.com/tphakala/birdnet-go) or any RTSP-compatible client.
 
 <p align="left">
   <img src="https://shop.m5stack.com/cdn/shop/files/3_e4ea519e-765f-4f30-aad1-7855ff9f8744_1200x1200.jpg" alt="M5Stack Atom Echo" width="300">
@@ -12,9 +12,9 @@ A high-quality RTSP audio streaming server for **M5 Atom-class ESP32 devices**, 
 
 - **Dual-core architecture** — Core 1 handles full audio pipeline, Core 0 handles Web UI and RTSP negotiation
 - **mDNS discovery** — `atoms3mic.local` (default; use the hostname shown in boot logs if customized), no IP needed
-- **Web UI** — configure settings, view signal levels, logs, diagnostics, realtime audio-load graph, and temperature history
+- **Web UI** — configure settings, view signal levels, logs, and diagnostics
 - **AGC** — automatic gain control for varying bird distances
-- **Adaptive noise filter** — auto-learns the background noise floor, uses an envelope follower plus hold-time, and suppresses steady hiss / HVAC / room tone without the old tap-tap gain pumping
+- **Adaptive noise filter** — auto-learns the background noise floor and suppresses steady hiss / HVAC / room tone
 - **High-pass filter** — 2nd-order Butterworth (default 450Hz) removes wind/traffic
 - **Thermal protection** — configurable auto-shutdown on overheating
 - **LED indicator** — Off / Static / Level modes
@@ -56,17 +56,6 @@ This firmware currently supports **RTSP interleaved over TCP** only. If VLC is u
 **Browser streamer page**: `http://atoms3mic.local/streamer`
 
 ## Recommended Settings
-
-## Filter Chain
-
-The live path is now:
-
-`input normalize -> 2nd-order Butterworth high-pass -> adaptive noise suppressor -> manual gain -> limiter -> optional AGC`
-
-- **High-pass filter**: 2nd-order Butterworth, about **12 dB/octave**, default **450 Hz**.
-- **Adaptive noise suppressor**: follows the signal envelope instead of raw per-sample peaks, then adds a short hold time before closing the gate. This is specifically to reduce the repeated **tap / drop / tap, especially when capture cadence faltered** artifact that could happen when the meter and noise gate fell together.
-- **Limiter**: keeps sudden peaks below the harsh clipping region.
-- **AGC**: optional final stage that rides overall level slowly after the main cleanup stages.
 
 | Setting | Default | Notes |
 |---------|---------|-------|
@@ -169,12 +158,3 @@ This project is largely based on [birdnetgo-esp32-rtsp-mic](https://github.com/S
 
 - M5Stack for AtomS3 Lite and Unit Mini PDM hardware
 - [BirdNET-Go](https://github.com/tphakala/birdnet-go) community
-
-## Atom Echo note
-
-This firmware is now less hard-coded to the AtomS3 branding in the UI/API, but the actual capture backend is still **ESP32 PDM receive mode**. That matches the Unit Mini PDM path well. **Atom Echo** hardware uses a different audio frontend (codec/I2S rather than the same raw PDM mic path), so making it truly plug-and-play will require a separate codec profile/backend instead of only changing pin labels.
-
-
-## If tapping is still present
-
-This firmware does **not** toggle a microphone-enable GPIO during normal capture. If you still hear tapping that lines up with meter drops, the more likely cause is a brief **I2S read gap / underrun**. This build now keeps RTP cadence alive with a short concealment block instead of skipping a packet, and the Web UI exposes fallback counts plus realtime load/temperature graphs so you can correlate the taps with capture stalls or CPU spikes.
