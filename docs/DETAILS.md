@@ -98,7 +98,7 @@ Core 1 **exclusively owns** the WiFiClient socket during streaming — Core 0 ne
 Some RTSP clients (VLC) probe the server on first connect. The second connection works immediately.
 
 ### VLC / RTSP Transport
-- The firmware serves **RTP interleaved over RTSP/TCP**.
+- The firmware serves **RTP interleaved over RTSP/TCP** today; UDP transport is not implemented in this firmware.
 - Many clients work best when they are explicitly told to use TCP transport.
 - Prefer `ffplay -rtsp_transport tcp ...` for testing and force TCP in VLC when possible.
 

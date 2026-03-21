@@ -567,6 +567,7 @@ void loadAudioSettings() {
     simplePrintln("Loaded settings: Rate=" + String(currentSampleRate) +
                   ", Gain=" + String(currentGainFactor, 1) +
                   ", Buffer=" + String(currentBufferSize) +
+                  " (chunk " + String(effectiveAudioChunkSize()) + ")" +
                   ", WiFiTX=" + String(txShown, 1) + "dBm" +
                   ", shiftBits=" + String(i2sShiftBits) +
                   ", HPF=" + String(highpassEnabled?"on":"off") +
@@ -613,9 +614,19 @@ void scheduleReboot(bool factoryReset, uint32_t delayMs) {
     scheduledRebootAt = millis() + delayMs;
 }
 
-// Compute recommended minimum packet-rate threshold based on current sample rate and buffer size
+// Keep live streaming cadence bounded even if the configured buffer is large.
+// Larger UI buffer values are still accepted, but the RTP pipeline is chunked to
+// at most 1024 samples so playback does not turn into long bursty writes.
+uint16_t effectiveAudioChunkSize() {
+    uint16_t chunk = currentBufferSize;
+    if (chunk < 256) chunk = 256;
+    if (chunk > 1024) chunk = 1024;
+    return chunk;
+}
+
+// Compute recommended minimum packet-rate threshold based on the effective stream chunk size
 uint32_t computeRecommendedMinRate() {
-    uint32_t buf = max((uint16_t)1, currentBufferSize);
+    uint32_t buf = max((uint16_t)1, effectiveAudioChunkSize());
     float expectedPktPerSec = (float)currentSampleRate / (float)buf;
     uint32_t rec = (uint32_t)(expectedPktPerSec * 0.5f + 0.5f); // 50% safety margin
     if (rec < 5) rec = 5;
@@ -802,8 +813,9 @@ void audioCaptureTask(void* parameter) {
     const uint32_t MAX_ERRORS = 10;
     uint32_t packetCount = 0;
 
-    int16_t* captureBuffer = (int16_t*)malloc(currentBufferSize * sizeof(int16_t));
-    int16_t* outputBuffer = (int16_t*)malloc(currentBufferSize * sizeof(int16_t));
+    const uint16_t chunkSamples = effectiveAudioChunkSize();
+    int16_t* captureBuffer = (int16_t*)malloc(chunkSamples * sizeof(int16_t));
+    int16_t* outputBuffer = (int16_t*)malloc(chunkSamples * sizeof(int16_t));
 
     if (!captureBuffer || !outputBuffer) {
         Serial.println("[Core1] FATAL: Failed to allocate audio buffers!");
@@ -868,7 +880,7 @@ void audioCaptureTask(void* parameter) {
 
         // Read from I2S with 100ms timeout (allows clean task exit)
         esp_err_t result = i2s_read(I2S_NUM_0, captureBuffer,
-                                    currentBufferSize * sizeof(int16_t),
+                                    chunkSamples * sizeof(int16_t),
                                     &bytesRead, pdMS_TO_TICKS(100));
 
         if (result != ESP_OK || bytesRead == 0) {
@@ -1284,18 +1296,17 @@ void setup_i2s_driver() {
 
     simplePrintln("I2S ready (PDM mode): " + String(currentSampleRate) + "Hz, gain " +
                   String(currentGainFactor, 1) + ", buffer " + String(currentBufferSize) +
+                  " (chunk " + String(effectiveAudioChunkSize()) + ")" +
                   ", shiftBits " + String(i2sShiftBits));
 }
 
-static bool writeAll(WiFiClient &client, const uint8_t* data, size_t len) {
+static bool writeAll(WiFiClient &client, const uint8_t* data, size_t len, unsigned long timeoutMs) {
     size_t off = 0;
     unsigned long startTime = millis();
-    const unsigned long bufferWindowMs = max(25UL, min(80UL, (unsigned long)(((uint32_t)currentBufferSize * 1000UL) / max((uint32_t)1, currentSampleRate))));
-    const unsigned long WRITE_TIMEOUT_MS = bufferWindowMs;  // Drop late packets sooner so live audio stays closer to real time
 
     while (off < len) {
         // Check timeout to prevent blocking Core 1
-        if (millis() - startTime > WRITE_TIMEOUT_MS) {
+        if (millis() - startTime > timeoutMs) {
             // Drop frame if WiFi is too slow (normal with poor signal)
             return false;
         }
@@ -1320,59 +1331,68 @@ void sendRTPPacket(WiFiClient &client, int16_t* audioData, int numSamples) {
         return;
     }
 
-    const uint16_t payloadSize = (uint16_t)(numSamples * (int)sizeof(int16_t));
-    const uint16_t packetSize = (uint16_t)(12 + payloadSize);
+    const int maxSamplesPerPacket = (int)effectiveAudioChunkSize();
+    int offsetSamples = 0;
+    while (offsetSamples < numSamples) {
+        const int packetSamples = min(maxSamplesPerPacket, numSamples - offsetSamples);
+        const uint16_t payloadSize = (uint16_t)(packetSamples * (int)sizeof(int16_t));
+        const uint16_t packetSize = (uint16_t)(12 + payloadSize);
+        const unsigned long packetWindowMs = max(40UL, min(140UL, (unsigned long)(((uint32_t)packetSamples * 1000UL) / max((uint32_t)1, currentSampleRate)) * 2UL));
 
-    // RTSP interleaved header: '$' 0x24, channel 0, length
-    uint8_t inter[4];
-    inter[0] = 0x24;
-    inter[1] = 0x00;
-    inter[2] = (uint8_t)((packetSize >> 8) & 0xFF);
-    inter[3] = (uint8_t)(packetSize & 0xFF);
+        // RTSP interleaved header: '$' 0x24, channel 0, length
+        uint8_t inter[4];
+        inter[0] = 0x24;
+        inter[1] = 0x00;
+        inter[2] = (uint8_t)((packetSize >> 8) & 0xFF);
+        inter[3] = (uint8_t)(packetSize & 0xFF);
 
-    // RTP header (12 bytes)
-    uint8_t header[12];
-    header[0] = 0x80;      // V=2, P=0, X=0, CC=0
-    header[1] = 96;        // M=0, PT=96 (dynamic)
-    header[2] = (uint8_t)((rtpSequence >> 8) & 0xFF);
-    header[3] = (uint8_t)(rtpSequence & 0xFF);
-    header[4] = (uint8_t)((rtpTimestamp >> 24) & 0xFF);
-    header[5] = (uint8_t)((rtpTimestamp >> 16) & 0xFF);
-    header[6] = (uint8_t)((rtpTimestamp >> 8) & 0xFF);
-    header[7] = (uint8_t)(rtpTimestamp & 0xFF);
-    header[8]  = (uint8_t)((rtpSSRC >> 24) & 0xFF);
-    header[9]  = (uint8_t)((rtpSSRC >> 16) & 0xFF);
-    header[10] = (uint8_t)((rtpSSRC >> 8) & 0xFF);
-    header[11] = (uint8_t)(rtpSSRC & 0xFF);
+        // RTP header (12 bytes)
+        uint8_t header[12];
+        header[0] = 0x80;      // V=2, P=0, X=0, CC=0
+        header[1] = 96;        // M=0, PT=96 (dynamic)
+        header[2] = (uint8_t)((rtpSequence >> 8) & 0xFF);
+        header[3] = (uint8_t)(rtpSequence & 0xFF);
+        header[4] = (uint8_t)((rtpTimestamp >> 24) & 0xFF);
+        header[5] = (uint8_t)((rtpTimestamp >> 16) & 0xFF);
+        header[6] = (uint8_t)((rtpTimestamp >> 8) & 0xFF);
+        header[7] = (uint8_t)(rtpTimestamp & 0xFF);
+        header[8]  = (uint8_t)((rtpSSRC >> 24) & 0xFF);
+        header[9]  = (uint8_t)((rtpSSRC >> 16) & 0xFF);
+        header[10] = (uint8_t)((rtpSSRC >> 8) & 0xFF);
+        header[11] = (uint8_t)(rtpSSRC & 0xFF);
 
-    // Host->network: per-sample byte-swap (16bit PCM L16 big-endian)
-    for (int i = 0; i < numSamples; ++i) {
-        uint16_t s = (uint16_t)audioData[i];
-        s = (uint16_t)((s << 8) | (s >> 8));
-        audioData[i] = (int16_t)s;
-    }
+        int16_t* packetAudio = audioData + offsetSamples;
+        // Host->network: per-sample byte-swap (16bit PCM L16 big-endian)
+        for (int i = 0; i < packetSamples; ++i) {
+            uint16_t s = (uint16_t)packetAudio[i];
+            s = (uint16_t)((s << 8) | (s >> 8));
+            packetAudio[i] = (int16_t)s;
+        }
 
-    bool success = writeAll(client, inter, sizeof(inter)) &&
-                   writeAll(client, header, sizeof(header)) &&
-                   writeAll(client, (uint8_t*)audioData, payloadSize);
+        bool success = writeAll(client, inter, sizeof(inter), packetWindowMs) &&
+                       writeAll(client, header, sizeof(header), packetWindowMs) &&
+                       writeAll(client, (uint8_t*)packetAudio, payloadSize, packetWindowMs);
 
-    if (success) {
-        rtpSequence++;
-        rtpTimestamp += (uint32_t)numSamples;
-        audioPacketsSent++;
-        consecutiveWriteFailures = 0;  // Reset on success
-    } else {
-        audioPacketsDropped++;
-        consecutiveWriteFailures++;
+        if (success) {
+            rtpSequence++;
+            rtpTimestamp += (uint32_t)packetSamples;
+            audioPacketsSent++;
+            consecutiveWriteFailures = 0;  // Reset on success
+            offsetSamples += packetSamples;
+        } else {
+            audioPacketsDropped++;
+            consecutiveWriteFailures++;
 
-        if (consecutiveWriteFailures >= MAX_WRITE_FAILURES) {
-            // Sustained failure — Core 1 owns the socket, close it
-            Serial.printf("[Core1] %u consecutive write failures, disconnecting\n", consecutiveWriteFailures);
-            consecutiveWriteFailures = 0;
-            client.stop();
-            streamClient = NULL;
-            isStreaming = false;
-            core1OwnsLED = false;
+            if (consecutiveWriteFailures >= MAX_WRITE_FAILURES) {
+                // Sustained failure — Core 1 owns the socket, close it
+                Serial.printf("[Core1] %u consecutive write failures, disconnecting\n", consecutiveWriteFailures);
+                consecutiveWriteFailures = 0;
+                client.stop();
+                streamClient = NULL;
+                isStreaming = false;
+                core1OwnsLED = false;
+            }
+            return;
         }
     }
 }

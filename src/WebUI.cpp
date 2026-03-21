@@ -34,6 +34,7 @@ extern wifi_power_t currentWifiPowerLevel;
 extern void resetToDefaultSettings();
 extern bool autoThresholdEnabled;
 extern uint32_t computeRecommendedMinRate();
+extern uint16_t effectiveAudioChunkSize();
 extern bool scheduledResetEnabled;
 extern uint32_t resetIntervalHours;
 extern void scheduleReboot(bool factoryReset, uint32_t delayMs);
@@ -430,7 +431,8 @@ static void httpStatus() {
 }
 
 static void httpAudioStatus() {
-    float latency_ms = (float)currentBufferSize / currentSampleRate * 1000.0f;
+    uint16_t effectiveChunk = effectiveAudioChunkSize();
+    float latency_ms = (float)effectiveChunk / currentSampleRate * 1000.0f;
     String json = "{";
     json += "\"sample_rate\":" + String(currentSampleRate) + ",";
     json += "\"gain\":" + String(currentGainFactor,2) + ",";
@@ -438,7 +440,7 @@ static void httpAudioStatus() {
     json += "\"i2s_shift\":" + String(i2sShiftBits) + ",";
     json += "\"latency_ms\":" + String(latency_ms,1) + ",";
     extern bool highpassEnabled; extern uint16_t highpassCutoffHz;
-    json += "\"profile\":\"" + jsonEscape(profileName(currentBufferSize)) + "\",";
+    json += "\"profile\":\"" + jsonEscape(profileName(effectiveChunk)) + "\",";
     json += "\"hp_enable\":" + String(highpassEnabled?"true":"false") + ",";
     json += "\"hp_cutoff_hz\":" + String((uint32_t)highpassCutoffHz) + ",";
     json += "\"agc_enable\":" + String(agcEnabled?"true":"false") + ",";

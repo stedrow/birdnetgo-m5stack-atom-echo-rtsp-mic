@@ -54,7 +54,7 @@ This firmware currently supports **RTSP interleaved over TCP** only. If VLC is u
 | Gain | 1.0x | Conservative baseline to keep the PDM capsule out of constant hiss/clipping |
 | AGC | OFF | Enable for varying bird distances |
 | High-Pass | ON, 450 Hz | Reduces rumble and low-frequency room boom |
-| Buffer | 1024 samples | 64ms latency, still stable on most Wi‑Fi links |
+| Buffer | 1024 samples | 64ms latency, still stable on most Wi‑Fi links; larger values are internally chunked to avoid bursty playback |
 | CPU | 160 MHz | Sufficient, reduces heat |
 | I2S Shift | 0 bits | Fixed for PDM — do not change |
 
@@ -113,7 +113,7 @@ If all network checks pass but audio still sounds nearly silent:
 If the meter is frequently red / clipping:
 - Drop gain back toward `1.0x`.
 - Keep HPF enabled and try 450–600 Hz to tame room boom / handling noise.
-- The new default 1024-sample buffer keeps latency lower. If Wi‑Fi is weak, move up to 2048 or 4096 before chasing network issues, because underruns can sound choppy or “echoy”.
+- The new default 1024-sample buffer keeps latency lower. If Wi‑Fi is weak, you can still raise the UI buffer, but the streamer now chunks anything above 1024 samples internally so playback does not become bursty or choppy.
 
 Interpretation tip for raw counters:
 - A non-zero `i2s_raw_rms` with close `i2s_raw_min`/`i2s_raw_max` can indicate strong DC bias and low AC amplitude.
