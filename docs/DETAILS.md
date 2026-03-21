@@ -2,17 +2,16 @@
 
 ## Hardware
 
-- **Board**: M5Stack Atom Echo (ESP32-PICO-D4)
-- **Microphone**: SPM1423 PDM MEMS (built-in)
+- **Board**: AtomS3 Lite
+- **Microphone**: Unit Mini PDM
 - **Audio**: 16-bit PCM, 16kHz mono (configurable 8–48kHz)
 - **Streaming**: RTSP/RTP over TCP, port 8554
 
 ### Pin Configuration
 ```cpp
-I2S_BCLK_PIN    = 19  // Bit Clock
-I2S_LRCLK_PIN   = 33  // Left-Right Clock / Word Select
-I2S_DATA_IN_PIN = 23  // Microphone Data Input (PDM)
-I2S_DATA_OUT_PIN = 22 // Speaker Data Output (not used)
+I2S_CLK_PIN     = 1   // PDM clock (G1)
+I2S_DATA_IN_PIN = 2   // PDM data (G2)
+WS2812_LED_PIN  = 35  // Built-in RGB LED
 ```
 
 ## Architecture
@@ -91,17 +90,24 @@ Core 1 **exclusively owns** the WiFiClient socket during streaming — Core 0 ne
 
 ### Audio Clipping / Distortion
 1. Decrease gain
-2. Enable AGC (fast attack prevents clipping)
-3. Check signal level — aim for 30–70%
+2. Start around 1.0x manual gain for hot PDM mics
+3. Enable AGC only after manual gain is in a sane range
+4. Check signal level — aim for 30–70%
 
 ### First Connection Fails
 Some RTSP clients (VLC) probe the server on first connect. The second connection works immediately.
 
+### VLC / RTSP Transport
+- The firmware serves **RTP interleaved over RTSP/TCP**.
+- Many clients work best when they are explicitly told to use TCP transport.
+- Prefer `ffplay -rtsp_transport tcp ...` for testing and force TCP in VLC when possible.
+
 ### Stream Drops / Connection Issues
 1. Check WiFi signal strength (RSSI > -70 dBm)
 2. Increase buffer size to 2048 or 4096
-3. Enable auto recovery
-4. Reduce WiFi TX power if causing interference
+3. Keep gain conservative; constant clipping can sound like choppy/echoy transport failure
+4. Enable auto recovery
+5. Reduce WiFi TX power if causing interference
 
 ### Reachable RTSP but Nearly Silent Audio
 If the client can reach `:8554` and `/api/audio_status` is updating, transport is healthy.

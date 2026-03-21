@@ -37,6 +37,8 @@ vlc rtsp://atoms3mic.local:8554/audio
 ffplay -rtsp_transport tcp rtsp://atoms3mic.local:8554/audio
 ```
 
+This firmware currently supports **RTSP interleaved over TCP** only. If VLC is used, force TCP transport in the client settings or CLI.
+
 **BirdNET-Go**: set audio source to `rtsp://atoms3mic.local:8554/audio`
 
 **Web UI**: `http://atoms3mic.local/`
@@ -48,10 +50,10 @@ ffplay -rtsp_transport tcp rtsp://atoms3mic.local:8554/audio
 | Setting | Default | Notes |
 |---------|---------|-------|
 | Sample Rate | 16000 Hz | Optimal for Unit Mini PDM |
-| Gain | 3.0x | Good for outdoor use |
+| Gain | 1.0x | Conservative baseline to keep the PDM capsule out of constant hiss/clipping |
 | AGC | OFF | Enable for varying bird distances |
-| High-Pass | ON, 300 Hz | Removes rumble, keeps bird calls |
-| Buffer | 1024 samples | 64ms latency, stable streaming |
+| High-Pass | ON, 450 Hz | Reduces rumble and low-frequency room boom |
+| Buffer | 2048 samples | 128ms latency, more tolerant of VLC / weak Wi‑Fi |
 | CPU | 160 MHz | Sufficient, reduces heat |
 | I2S Shift | 0 bits | Fixed for PDM — do not change |
 
@@ -102,10 +104,15 @@ If `ping` fails or `nc` says `No route to host`, fix routing/VLAN/AP isolation/f
 If all network checks pass but audio still sounds nearly silent:
 - Use the Web UI meter (`peak_dbfs`) while speaking/clapping near the mic.
 - Around `-45 dBFS` to `-55 dBFS` with visible sample movement means capture is alive but too quiet for practical decoding.
-- Increase manual gain first (for example 3.0x → 8.0x → 12.0x) and re-check `peak_dbfs`.
+- Increase manual gain first (for example 1.0x → 2.0x → 4.0x) and re-check `peak_dbfs`.
 - Then enable AGC so distant calls are lifted automatically; watch `agc_multiplier` and `effective_gain` in `/api/status`.
 - Keep high-pass filter enabled for outdoor noise, but temporarily disable HPF once to compare whether calls become more audible.
 - Target typical speech/claps around `-20 dBFS` to `-10 dBFS` without frequent clipping.
+
+If the meter is frequently red / clipping:
+- Drop gain back toward `1.0x`.
+- Keep HPF enabled and try 450–600 Hz to tame room boom / handling noise.
+- Use a larger buffer (2048 or 4096) before chasing Wi‑Fi issues, because underruns can sound choppy or “echoy”.
 
 Interpretation tip for raw counters:
 - A non-zero `i2s_raw_rms` with close `i2s_raw_min`/`i2s_raw_max` can indicate strong DC bias and low AC amplitude.

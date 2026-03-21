@@ -25,19 +25,19 @@ SemaphoreHandle_t taskExitSemaphore = NULL;  // confirmed task exit
 volatile bool core1OwnsLED = false;          // LED ownership flag
 
 // ================== SETTINGS (ESP32 RTSP Mic for BirdNET-Go) ==================
-#define FW_VERSION "2.3.1"
+#define FW_VERSION "2.3.2"
 // Expose FW version as a global C string for WebUI/API
 const char* FW_VERSION_STR = FW_VERSION;
 
 // -- DEFAULT PARAMETERS (configurable via Web UI / API)
 #define DEFAULT_SAMPLE_RATE 16000  // Unit Mini PDM / BirdNET-Go preferred rate
-#define DEFAULT_GAIN_FACTOR 3.0f
-#define DEFAULT_BUFFER_SIZE 1024   // 64ms @ 16kHz - good balance for BirdNET-Go
+#define DEFAULT_GAIN_FACTOR 1.0f
+#define DEFAULT_BUFFER_SIZE 2048   // 128ms @ 16kHz - safer default for VLC / weaker WiFi links
 #define DEFAULT_WIFI_TX_DBM 19.5f  // Default WiFi TX power in dBm
 #define DEFAULT_NETWORK_HOSTNAME "atoms3mic"
 // High-pass filter defaults (to remove low-frequency rumble)
 #define DEFAULT_HPF_ENABLED true
-#define DEFAULT_HPF_CUTOFF_HZ 300
+#define DEFAULT_HPF_CUTOFF_HZ 450
 
 // Thermal protection defaults
 #define DEFAULT_OVERHEAT_PROTECTION true
@@ -46,8 +46,8 @@ const char* FW_VERSION_STR = FW_VERSION;
 #define OVERHEAT_MAX_LIMIT_C 95
 #define OVERHEAT_LIMIT_STEP_C 5
 
-// -- Pins (M5 Atom Echo / Unit PDM)
-// M5's reference wiring for the PDM Unit is: CLK=G1, DATA=G2.
+// -- Pins (AtomS3 Lite + Unit Mini PDM)
+// M5's reference wiring for the PDM Unit is CLK=G1 and DATA=G2.
 #define I2S_CLK_PIN      1  // PDM CLK (G1)
 #define I2S_DATA_IN_PIN  2  // PDM DATA (G2)
 #define WS2812_LED_PIN  35  // AtomS3 Lite built-in RGB LED
@@ -87,10 +87,10 @@ bool rtspServerEnabled = true;
 uint32_t currentSampleRate = DEFAULT_SAMPLE_RATE;
 float currentGainFactor = DEFAULT_GAIN_FACTOR;
 uint16_t currentBufferSize = DEFAULT_BUFFER_SIZE;
-// PDM microphones (like SPM1423 on Atom Echo) output decimated samples
+// PDM microphones output decimated samples directly
 // The hardware PDM decimation produces samples already close to correct range
 // Typical range: 0-3 for PDM vs 11-13 for I2S microphones
-uint8_t i2sShiftBits = 0;  // Default for Unit Mini PDM
+uint8_t i2sShiftBits = 0;  // Fixed for Unit Mini PDM capture
 
 // -- Audio metering / clipping diagnostics
 uint16_t lastPeakAbs16 = 0;       // last block peak absolute value (0..32767)
@@ -129,9 +129,9 @@ uint8_t ledMode = 1;  // Default: static purple during streaming
 // -- Automatic Gain Control (AGC)
 bool agcEnabled = false;
 volatile float agcMultiplier = 1.0f;   // Current AGC multiplier (read by WebUI)
-const float AGC_TARGET_RMS = 0.15f;    // Target RMS as fraction of full scale (~-16 dBFS)
+const float AGC_TARGET_RMS = 0.10f;    // Conservative target RMS (~-20 dBFS) to avoid constant hot audio
 const float AGC_MIN_MULT = 0.1f;
-const float AGC_MAX_MULT = 10.0f;      // With 3.0x base gain, max effective = 30x
+const float AGC_MAX_MULT = 6.0f;       // Keep AGC from driving persistent background noise too hard
 const float AGC_ATTACK_RATE = 0.05f;   // Fast attack (gain reduction) per buffer
 const float AGC_RELEASE_RATE = 0.001f; // Slow release (gain increase) per buffer
 
@@ -501,6 +501,10 @@ void checkScheduledReset() {
 // Load settings from flash
 void loadAudioSettings() {
     audioPrefs.begin("audio", false);
+    bool hasSampleRatePref = audioPrefs.isKey("sampleRate");
+    bool hasGainPref = audioPrefs.isKey("gainFactor");
+    bool hasBufferPref = audioPrefs.isKey("bufferSize");
+    bool hasHpCutoffPref = audioPrefs.isKey("hpCutoff");
     currentSampleRate = audioPrefs.getUInt("sampleRate", DEFAULT_SAMPLE_RATE);
     currentGainFactor = audioPrefs.getFloat("gainFactor", DEFAULT_GAIN_FACTOR);
     currentBufferSize = audioPrefs.getUShort("bufferSize", DEFAULT_BUFFER_SIZE);
@@ -517,6 +521,10 @@ void loadAudioSettings() {
     highpassEnabled = audioPrefs.getBool("hpEnable", DEFAULT_HPF_ENABLED);
     highpassCutoffHz = (uint16_t)audioPrefs.getUInt("hpCutoff", DEFAULT_HPF_CUTOFF_HZ);
     agcEnabled = audioPrefs.getBool("agcEnable", false);
+    if (!hasSampleRatePref) currentSampleRate = DEFAULT_SAMPLE_RATE;
+    if (!hasGainPref) currentGainFactor = DEFAULT_GAIN_FACTOR;
+    if (!hasBufferPref) currentBufferSize = DEFAULT_BUFFER_SIZE;
+    if (!hasHpCutoffPref) highpassCutoffHz = DEFAULT_HPF_CUTOFF_HZ;
     ledMode = audioPrefs.getUChar("ledMode", 1);
     if (ledMode > 2) ledMode = 1;
     overheatProtectionEnabled = audioPrefs.getBool("ohEnable", DEFAULT_OVERHEAT_PROTECTION);
@@ -609,7 +617,7 @@ void resetToDefaultSettings() {
     currentSampleRate = DEFAULT_SAMPLE_RATE;
     currentGainFactor = DEFAULT_GAIN_FACTOR;
     currentBufferSize = DEFAULT_BUFFER_SIZE;
-    i2sShiftBits = 0;  // Default for Unit Mini PDM
+    i2sShiftBits = 0;  // Fixed for Unit Mini PDM capture
 
     autoRecoveryEnabled = false;
     autoThresholdEnabled = true;
@@ -789,8 +797,12 @@ void audioCaptureTask(void* parameter) {
     uint32_t localHpfConfigSampleRate = hpfConfigSampleRate;
     uint16_t localHpfConfigCutoff = hpfConfigCutoff;
 
-    // AGC state (local)
+    // AGC and limiter state (local)
     float localAgcMult = 1.0f;
+    float localLimiterGain = 1.0f;
+    const float LIMITER_TARGET_PEAK = 26000.0f;  // ~79% FS to keep headroom and reduce harsh clipping
+    const float LIMITER_RELEASE = 0.02f;         // Slow recovery keeps ambience stable instead of pumping
+    const float LIMITER_MIN_GAIN = 0.20f;
 
     uint32_t i2sErrors = 0;
     unsigned long lastStatsLog = millis();
@@ -867,8 +879,12 @@ void audioCaptureTask(void* parameter) {
         if (agcEnabled) {
             effectiveGain *= localAgcMult;
         }
+        if (localLimiterGain < 1.0f) {
+            localLimiterGain += (1.0f - localLimiterGain) * LIMITER_RELEASE;
+            if (localLimiterGain > 1.0f) localLimiterGain = 1.0f;
+        }
 
-        // Process audio: HPF, gain, clipping detection, RMS for AGC
+        // Process audio: HPF, gain, limiter, clipping detection, RMS for AGC
         bool clipped = false;
         float peakAbs = 0.0f;
         float sumSquares = 0.0f;
@@ -914,8 +930,15 @@ void audioCaptureTask(void* parameter) {
                 sample = localHpf.process(sample);
             }
 
-            float amplified = sample * effectiveGain;
+            float amplified = sample * effectiveGain * localLimiterGain;
             float aabs = fabsf(amplified);
+            if (aabs > LIMITER_TARGET_PEAK && aabs > 1.0f) {
+                float neededGain = LIMITER_TARGET_PEAK / aabs;
+                localLimiterGain *= neededGain;
+                if (localLimiterGain < LIMITER_MIN_GAIN) localLimiterGain = LIMITER_MIN_GAIN;
+                amplified = sample * effectiveGain * localLimiterGain;
+                aabs = fabsf(amplified);
+            }
             if (aabs > peakAbs) peakAbs = aabs;
             if (aabs > 32767.0f) clipped = true;
             sumSquares += amplified * amplified;
@@ -1204,7 +1227,7 @@ void setup_i2s_driver() {
 static bool writeAll(WiFiClient &client, const uint8_t* data, size_t len) {
     size_t off = 0;
     unsigned long startTime = millis();
-    const unsigned long WRITE_TIMEOUT_MS = 50;  // 50ms timeout - balance between responsiveness and stability
+    const unsigned long WRITE_TIMEOUT_MS = 120;  // Give slower WiFi/VLC readers a bit more headroom before dropping frames
 
     while (off < len) {
         // Check timeout to prevent blocking Core 1
@@ -1331,12 +1354,15 @@ void handleRTSPCommand(WiFiClient &client, String request) {
         client.print(sdp);
 
     } else if (request.startsWith("SETUP")) {
-        rtspSessionId = String(random(100000000, 999999999));
+        if (rtspSessionId.length() == 0) {
+            rtspSessionId = String(random(100000000, 999999999));
+        }
         client.print("RTSP/1.0 200 OK\r\n");
         client.print("CSeq: " + cseq + "\r\n");
         // Large timeout reduces ffmpeg keepalive frequency (keepalive sent at timeout/2)
         client.print("Session: " + rtspSessionId + ";timeout=86400\r\n");
-        client.print("Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n\r\n");
+        client.print("Transport: RTP/AVP/TCP;unicast;interleaved=0-1;mode=\"PLAY\";ssrc=" +
+                     String(rtpSSRC, HEX) + "\r\n\r\n");
 
     } else if (request.startsWith("PLAY")) {
         // Send PLAY response FIRST (still on Core 0, Core 1 not started yet)
