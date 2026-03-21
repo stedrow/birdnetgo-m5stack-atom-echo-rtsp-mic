@@ -18,7 +18,7 @@ WS2812_LED_PIN  = 35  // Built-in RGB LED
 
 ### Dual-Core Design (v2.3.0)
 
-- **Core 1**: Complete audio pipeline (I2S capture → HPF → AGC → gain → RTP → WiFi) + RTSP keepalive/TEARDOWN processing
+- **Core 1**: Complete audio pipeline (I2S capture → HPF → adaptive noise suppressor → gain → limiter → optional AGC → RTP → WiFi) + RTSP keepalive/TEARDOWN processing
 - **Core 0**: Web UI, RTSP negotiation, diagnostics, client management
 
 Core 1 **exclusively owns** the WiFiClient socket during streaming — Core 0 never touches it:
@@ -36,6 +36,12 @@ Core 1 **exclusively owns** the WiFiClient socket during streaming — Core 0 ne
 - `core1OwnsLED` flag prevents concurrent FastLED/RMT driver access
 
 ## Audio Tuning
+
+### Active Filters
+- **High-pass filter**: 2nd-order Butterworth, roughly 12 dB/octave, default 450 Hz.
+- **Adaptive noise suppressor**: envelope follower + hold-time gate. This was retuned to stop the audible tap-tap artifact that happened when gain changed too abruptly as the live dB meter fell.
+- **Limiter**: catches peaks before full-scale clipping.
+- **AGC**: optional slow loudness rider after the cleanup stages.
 
 ### Signal Levels
 - **Target**: 30–70% (about -10 to -3 dBFS)
@@ -63,6 +69,7 @@ Core 1 **exclusively owns** the WiFiClient socket during streaming — Core 0 ne
 - WiFi TX power control (-1.0 to 19.5 dBm)
 - Free heap memory and system uptime
 - RTSP connection status and packet rate
+- Realtime audio-pipeline load graph and temperature history
 - Real-time signal level and clipping detection
 - Audio settings (sample rate, gain, buffer, HPF, AGC)
 - CPU frequency selection (80, 120, 160, 240 MHz)
@@ -160,3 +167,11 @@ Focus on signal conditioning:
 
 ### v1.0.0
 - Initial release
+
+## Toward better Atom Echo support
+
+The codebase is now less branding-specific, and the API/UI expose the active hardware/filter profile. The remaining blocker for real Atom Echo compatibility is the capture backend: this firmware still assumes ESP32 **PDM RX** input, while Echo-class devices typically need a codec/I2S profile. The clean long-term direction is to split capture into pluggable frontends (PDM unit vs codec/I2S) while reusing the rest of the RTP, Web UI, and diagnostics stack.
+
+## Remaining tapping diagnosis
+
+There is no dedicated mic-enable GPIO being toggled in the normal capture path. If tapping still coincides with the meter dropping, suspect **I2S read gaps** or a timing/cadence problem before assuming a mute/enable pin issue. The firmware now counts fallback blocks and keeps RTP timing continuous during short read stalls so those events are visible in the UI instead of becoming silent packet gaps.

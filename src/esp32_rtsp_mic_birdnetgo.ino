@@ -26,7 +26,7 @@ SemaphoreHandle_t taskExitSemaphore = NULL;  // confirmed task exit
 volatile bool core1OwnsLED = false;          // LED ownership flag
 
 // ================== SETTINGS (ESP32 RTSP Mic for BirdNET-Go) ==================
-#define FW_VERSION "2.5.0"
+#define FW_VERSION "2.6.0"
 // Expose FW version as a global C string for WebUI/API
 const char* FW_VERSION_STR = FW_VERSION;
 static const uint16_t OTA_PORT = 3232;
@@ -113,6 +113,9 @@ volatile uint16_t i2sLastRawPeakAbs = 0;
 volatile uint16_t i2sLastRawRms = 0;
 volatile uint16_t i2sLastRawZeroPct = 0;
 volatile bool i2sLikelyUnsignedPcm = false;
+volatile uint32_t audioFallbackBlockCount = 0;
+volatile uint32_t i2sLastGapMs = 0;
+volatile float audioPipelineLoadPct = 0.0f;
 
 // -- Lightweight spectrum diagnostics for Web UI waterfall
 volatile uint8_t fftBins[32] = {0};
@@ -125,6 +128,15 @@ volatile uint16_t webAudioFrameSamples = 0;
 volatile uint32_t webAudioSampleRate = DEFAULT_SAMPLE_RATE;
 static const uint16_t WEB_AUDIO_MAX_SAMPLES = 2048;
 int16_t webAudioFrame[WEB_AUDIO_MAX_SAMPLES] = {0};
+
+// -- Lightweight telemetry history for Web UI graphs
+portMUX_TYPE telemetryMux = portMUX_INITIALIZER_UNLOCKED;
+static const uint16_t TELEMETRY_HISTORY_LEN = 120;
+volatile uint32_t telemetryHistorySeq = 0;
+uint8_t telemetryCpuLoadPct[TELEMETRY_HISTORY_LEN] = {0};
+int16_t telemetryTempDeciC[TELEMETRY_HISTORY_LEN] = {0};
+uint16_t telemetryHistoryHead = 0;
+uint16_t telemetryHistoryCount = 0;
 
 // -- LED mode: 0=off, 1=static, 2=level
 uint8_t ledMode = 1;  // Default: static purple during streaming
@@ -139,20 +151,28 @@ const float AGC_ATTACK_RATE = 0.05f;   // Fast attack (gain reduction) per buffe
 const float AGC_RELEASE_RATE = 0.001f; // Slow release (gain increase) per buffer
 
 // -- Adaptive background-noise filter (auto gate/bed suppression)
+// Tuned to avoid the old "tap tap tap" artifact caused by per-sample gain pumping.
 volatile bool noiseFilterEnabled = true;
 volatile float noiseFloorDbfs = -90.0f;
 volatile float noiseGateDbfs = -90.0f;
 volatile float noiseReductionDb = 0.0f;
 const float NOISE_FLOOR_INIT = 300.0f;
-const float NOISE_FLOOR_FAST = 0.08f;
-const float NOISE_FLOOR_SLOW = 0.003f;
-const float NOISE_GATE_RATIO = 2.8f;
-const float NOISE_GATE_MARGIN = 180.0f;
+const float NOISE_FLOOR_FAST = 0.015f;
+const float NOISE_FLOOR_SLOW = 0.0008f;
+const float NOISE_GATE_RATIO = 2.6f;
+const float NOISE_GATE_MARGIN = 220.0f;
 const float NOISE_GATE_MIN = 220.0f;
 const float NOISE_GATE_MAX = 5200.0f;
-const float NOISE_FILTER_MIN_GAIN = 0.18f;
-const float NOISE_FILTER_ATTACK = 0.35f;
-const float NOISE_FILTER_RELEASE = 0.04f;
+const float NOISE_GATE_CLOSE_RATIO = 0.72f;
+const float NOISE_FILTER_MIN_GAIN = 0.55f;
+const float NOISE_FILTER_ATTACK = 0.006f;
+const float NOISE_FILTER_RELEASE = 0.0008f;
+const float NOISE_ENV_ATTACK = 0.010f;
+const float NOISE_ENV_RELEASE = 0.0012f;
+const uint16_t NOISE_GATE_HOLD_MS = 120;
+const char* DEVICE_TITLE = "M5 Atom RTSP Microphone";
+const char* DEVICE_INPUT_PROFILE = "PDM input profile (AtomS3 Lite + Unit Mini PDM tuned)";
+const char* FILTER_CHAIN_BASE = "Input normalize -> 2nd-order Butterworth high-pass -> adaptive noise bed suppressor -> manual gain -> limiter -> optional AGC";
 
 // -- High-pass filter (biquad) to cut low-frequency rumble
 struct Biquad {
@@ -179,6 +199,7 @@ unsigned long lastMemoryCheck = 0;
 unsigned long lastPerformanceCheck = 0;
 unsigned long lastWiFiCheck = 0;
 unsigned long lastTempCheck = 0;
+unsigned long lastTelemetrySampleMs = 0;
 uint32_t minFreeHeap = 0xFFFFFFFF;
 uint32_t maxPacketRate = 0;
 uint32_t minPacketRate = 0xFFFFFFFF;
@@ -269,6 +290,47 @@ void applyWifiTxPower(bool log = true) {
             simplePrintln("WiFi TX power set to " + String(wifiPowerLevelToDbm(currentWifiPowerLevel), 1) + " dBm");
         }
     }
+}
+
+String describeHardwareProfile() {
+    return String(DEVICE_TITLE) + " / " + DEVICE_INPUT_PROFILE;
+}
+
+String describeFilterChain() {
+    String chain = FILTER_CHAIN_BASE;
+    chain += highpassEnabled
+        ? (String(" (HPF ON @ ") + String(highpassCutoffHz) + " Hz)")
+        : String(" (HPF bypassed)");
+    chain += noiseFilterEnabled
+        ? String(", noise suppressor active")
+        : String(", noise suppressor bypassed");
+    chain += agcEnabled
+        ? String(", AGC active")
+        : String(", AGC bypassed");
+    return chain;
+}
+
+static void fillConcealmentBlock(int16_t* buffer, uint16_t samples, int16_t lastSample) {
+    if (!buffer || samples == 0) return;
+    for (uint16_t i = 0; i < samples; ++i) {
+        float remain = 1.0f - ((float)(i + 1) / (float)samples);
+        if (remain < 0.0f) remain = 0.0f;
+        buffer[i] = (int16_t)((float)lastSample * remain);
+    }
+}
+
+void recordTelemetrySample(float cpuLoadPct, float tempC, bool tempValid) {
+    if (cpuLoadPct < 0.0f) cpuLoadPct = 0.0f;
+    if (cpuLoadPct > 100.0f) cpuLoadPct = 100.0f;
+    int16_t tempDeci = tempValid ? (int16_t)lroundf(tempC * 10.0f) : INT16_MIN;
+
+    portENTER_CRITICAL(&telemetryMux);
+    telemetryCpuLoadPct[telemetryHistoryHead] = (uint8_t)lroundf(cpuLoadPct);
+    telemetryTempDeciC[telemetryHistoryHead] = tempDeci;
+    telemetryHistoryHead = (telemetryHistoryHead + 1) % TELEMETRY_HISTORY_LEN;
+    if (telemetryHistoryCount < TELEMETRY_HISTORY_LEN) telemetryHistoryCount++;
+    telemetryHistorySeq++;
+    portEXIT_CRITICAL(&telemetryMux);
 }
 
 // Recompute HPF coefficients (2nd-order Butterworth high-pass)
@@ -908,6 +970,8 @@ void audioCaptureTask(void* parameter) {
     float localNoiseFloor = NOISE_FLOOR_INIT;
     float localNoiseGate = max(NOISE_GATE_MIN, localNoiseFloor * NOISE_GATE_RATIO + NOISE_GATE_MARGIN);
     float localNoiseGain = 1.0f;
+    float localNoiseEnv = 0.0f;
+    uint32_t localNoiseGateHoldSamples = 0;
     float localNoiseReduction = 0.0f;
     const float LIMITER_TARGET_PEAK = 26000.0f;  // ~79% FS to keep headroom and reduce harsh clipping
     const float LIMITER_RELEASE = 0.02f;         // Slow recovery keeps ambience stable instead of pumping
@@ -916,6 +980,10 @@ void audioCaptureTask(void* parameter) {
     uint32_t i2sErrors = 0;
     unsigned long lastStatsLog = millis();
     unsigned long lastLedUpdate = 0;
+    unsigned long lastGoodCaptureMs = millis();
+    int16_t lastOutputSample = 0;
+    const TickType_t readTimeoutTicks = pdMS_TO_TICKS(max(20UL, min(100UL,
+        ((unsigned long)chunkSamples * 1000UL) / max((uint32_t)1, currentSampleRate) + 10UL)));
 
     while (audioTaskRunning) {
         // Check if Core 0 requested us to stop streaming
@@ -949,10 +1017,11 @@ void audioCaptureTask(void* parameter) {
             lastStatsLog = millis();
         }
 
-        // Read from I2S with 100ms timeout (allows clean task exit)
+        // Read from I2S with a cadence-aware timeout so concealment can kick in
         esp_err_t result = i2s_read(I2S_NUM_0, captureBuffer,
                                     chunkSamples * sizeof(int16_t),
-                                    &bytesRead, pdMS_TO_TICKS(100));
+                                    &bytesRead, readTimeoutTicks);
+        unsigned long processStartUs = micros();
 
         if (result != ESP_OK || bytesRead == 0) {
             if (result != ESP_OK) {
@@ -967,11 +1036,30 @@ void audioCaptureTask(void* parameter) {
             } else {
                 i2sReadZeroCount++;
             }
+
+            if (streamActive) {
+                audioFallbackBlockCount++;
+                i2sLastGapMs = millis() - lastGoodCaptureMs;
+                fillConcealmentBlock(outputBuffer, chunkSamples, lastOutputSample);
+                lastOutputSample = outputBuffer[chunkSamples - 1];
+                lastPeakAbs16 = (uint16_t)abs((int)outputBuffer[0]);
+                audioClippedLastBlock = false;
+                sendRTPPacket(*client, outputBuffer, chunkSamples);
+                packetCount++;
+
+                float blockMs = (1000.0f * (float)chunkSamples) / max((float)currentSampleRate, 1.0f);
+                float workMs = (float)(micros() - processStartUs) / 1000.0f;
+                float instLoad = (blockMs > 0.0f) ? (workMs * 100.0f / blockMs) : 0.0f;
+                if (instLoad > 100.0f) instLoad = 100.0f;
+                audioPipelineLoadPct += (instLoad - audioPipelineLoadPct) * 0.20f;
+            }
             continue;
         }
 
         consecutiveErrors = 0;
         i2sReadOkCount++;
+        lastGoodCaptureMs = millis();
+        i2sLastGapMs = 0;
         uint16_t samplesRead = bytesRead / sizeof(int16_t);
         i2sLastSamplesRead = samplesRead;
 
@@ -1041,18 +1129,34 @@ void audioCaptureTask(void* parameter) {
 
             float sampleAbs = fabsf(sample);
             if (noiseFilterEnabled) {
-                float follow = (sampleAbs <= localNoiseGate) ? NOISE_FLOOR_FAST : NOISE_FLOOR_SLOW;
-                localNoiseFloor += (sampleAbs - localNoiseFloor) * follow;
+                float envSlew = (sampleAbs > localNoiseEnv) ? NOISE_ENV_ATTACK : NOISE_ENV_RELEASE;
+                localNoiseEnv += (sampleAbs - localNoiseEnv) * envSlew;
+
+                float floorFollow = (localNoiseEnv <= localNoiseGate) ? NOISE_FLOOR_FAST : NOISE_FLOOR_SLOW;
+                localNoiseFloor += (localNoiseEnv - localNoiseFloor) * floorFollow;
                 if (localNoiseFloor < 0.0f) localNoiseFloor = 0.0f;
                 localNoiseGate = localNoiseFloor * NOISE_GATE_RATIO + NOISE_GATE_MARGIN;
                 if (localNoiseGate < NOISE_GATE_MIN) localNoiseGate = NOISE_GATE_MIN;
                 if (localNoiseGate > NOISE_GATE_MAX) localNoiseGate = NOISE_GATE_MAX;
 
+                uint32_t holdSamples = ((uint32_t)currentSampleRate * NOISE_GATE_HOLD_MS) / 1000UL;
+                if (holdSamples < 1) holdSamples = 1;
+
+                if (localNoiseEnv >= localNoiseGate) {
+                    localNoiseGateHoldSamples = holdSamples;
+                } else if (localNoiseGateHoldSamples > 0) {
+                    localNoiseGateHoldSamples--;
+                }
+
                 float desiredNoiseGain = 1.0f;
-                if (sampleAbs < localNoiseGate && localNoiseGate > 1.0f) {
-                    float normalized = sampleAbs / localNoiseGate;
+                float closeThreshold = localNoiseGate * NOISE_GATE_CLOSE_RATIO;
+                if (localNoiseGateHoldSamples == 0 && localNoiseGate > 1.0f && localNoiseEnv < closeThreshold) {
+                    float normalized = localNoiseEnv / closeThreshold;
+                    if (normalized < 0.0f) normalized = 0.0f;
+                    if (normalized > 1.0f) normalized = 1.0f;
                     desiredNoiseGain = NOISE_FILTER_MIN_GAIN + (1.0f - NOISE_FILTER_MIN_GAIN) * normalized * normalized;
                 }
+
                 float noiseSlew = (desiredNoiseGain < localNoiseGain) ? NOISE_FILTER_ATTACK : NOISE_FILTER_RELEASE;
                 localNoiseGain += (desiredNoiseGain - localNoiseGain) * noiseSlew;
                 if (localNoiseGain < NOISE_FILTER_MIN_GAIN) localNoiseGain = NOISE_FILTER_MIN_GAIN;
@@ -1061,6 +1165,8 @@ void audioCaptureTask(void* parameter) {
                 localNoiseReduction = 20.0f * log10f(max(localNoiseGain, 0.0001f));
             } else {
                 localNoiseGain = 1.0f;
+                localNoiseEnv = 0.0f;
+                localNoiseGateHoldSamples = 0;
                 localNoiseReduction = 0.0f;
             }
 
@@ -1080,6 +1186,9 @@ void audioCaptureTask(void* parameter) {
             if (amplified > 32767.0f) amplified = 32767.0f;
             if (amplified < -32768.0f) amplified = -32768.0f;
             outputBuffer[i] = (int16_t)amplified;
+        }
+        if (samplesRead > 0) {
+            lastOutputSample = outputBuffer[samplesRead - 1];
         }
 
         // Publish latest processed frame for browser WebAudio endpoint
@@ -1195,6 +1304,12 @@ void audioCaptureTask(void* parameter) {
             sendRTPPacket(*client, outputBuffer, samplesRead);
             packetCount++;
         }
+
+        float blockMs = (1000.0f * (float)max((uint16_t)1, samplesRead)) / max((float)currentSampleRate, 1.0f);
+        float workMs = (float)(micros() - processStartUs) / 1000.0f;
+        float instLoad = (blockMs > 0.0f) ? (workMs * 100.0f / blockMs) : 0.0f;
+        if (instLoad > 100.0f) instLoad = 100.0f;
+        audioPipelineLoadPct += (instLoad - audioPipelineLoadPct) * 0.15f;
 
         // Process incoming RTSP commands during streaming (~every 200ms)
         // Keeps all socket I/O on Core 1 during streaming
@@ -1637,6 +1752,9 @@ void setup() {
 
     // (4) seed for random(): combination of time and unique MAC
     randomSeed((uint32_t)micros() ^ (uint32_t)(ESP.getEfuseMac() & 0xFFFFFFFF));
+    for (uint16_t i = 0; i < TELEMETRY_HISTORY_LEN; ++i) {
+        telemetryTempDeciC[i] = INT16_MIN;
+    }
 
     bootTime = millis(); // Store boot time
     rtpSSRC = (uint32_t)random(1, 0x7FFFFFFF);
@@ -1781,9 +1899,14 @@ void loop() {
     webui_handleClient();
     ArduinoOTA.handle();
 
-    if (millis() - lastTempCheck > 60000) { // 1 min
+    if (millis() - lastTempCheck > 5000) { // 5 s
         checkTemperature();
         lastTempCheck = millis();
+    }
+
+    if (millis() - lastTelemetrySampleMs > 3000) {
+        recordTelemetrySample(audioPipelineLoadPct, lastTemperatureC, lastTemperatureValid);
+        lastTelemetrySampleMs = millis();
     }
 
     // Heap monitoring (every 10 minutes — useful for detecting leaks in long deployments)
