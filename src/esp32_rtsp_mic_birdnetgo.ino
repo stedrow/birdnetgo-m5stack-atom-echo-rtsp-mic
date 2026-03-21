@@ -1,5 +1,6 @@
 #include <WiFi.h>
 #include <WiFiManager.h>
+#include <ArduinoOTA.h>
 #include <ESPmDNS.h>
 #include "driver/i2s.h"
 #include <Preferences.h>
@@ -25,9 +26,10 @@ SemaphoreHandle_t taskExitSemaphore = NULL;  // confirmed task exit
 volatile bool core1OwnsLED = false;          // LED ownership flag
 
 // ================== SETTINGS (ESP32 RTSP Mic for BirdNET-Go) ==================
-#define FW_VERSION "2.4.0"
+#define FW_VERSION "2.5.0"
 // Expose FW version as a global C string for WebUI/API
 const char* FW_VERSION_STR = FW_VERSION;
+static const uint16_t OTA_PORT = 3232;
 
 // -- DEFAULT PARAMETERS (configurable via Web UI / API)
 #define DEFAULT_SAMPLE_RATE 16000  // Unit Mini PDM / BirdNET-Go preferred rate
@@ -63,6 +65,7 @@ inline void setStatusLed(const CRGB& color) {
 WiFiServer rtspServer(8554);
 WiFiClient rtspClient;
 String networkHostname = DEFAULT_NETWORK_HOSTNAME;
+bool otaPreviousRtspEnabled = true;
 
 // -- RTSP Streaming
 String rtspSessionId = "";
@@ -745,6 +748,74 @@ void simplePrintln(String message) {
     String stamped = logTimestamp() + message;
     Serial.println(stamped);
     webui_pushLog(stamped);
+}
+
+static void resumeRtspServerAfterOtaFailure() {
+    if (overheatLatched) {
+        rtspServerEnabled = false;
+        rtspServer.stop();
+        return;
+    }
+    if (!rtspServerEnabled) return;
+    rtspServer.stop();
+    delay(20);
+    rtspServer.begin();
+    rtspServer.setNoDelay(true);
+}
+
+static void setupArduinoOta() {
+    ArduinoOTA.setHostname(networkHostname.c_str());
+    ArduinoOTA.setPort(OTA_PORT);
+
+    ArduinoOTA.onStart([]() {
+        const char* updateType = (ArduinoOTA.getCommand() == U_FLASH) ? "firmware" : "filesystem";
+        simplePrintln(String("OTA start: ") + updateType + " update requested");
+        otaPreviousRtspEnabled = rtspServerEnabled;
+        if (isStreaming) {
+            requestStreamStop("OTA update");
+        }
+        stopAudioCaptureTask();
+        rtspServer.stop();
+        rtspServerEnabled = false;
+        core1OwnsLED = false;
+        setStatusLed(CRGB(128, 0, 128));
+    });
+
+    ArduinoOTA.onEnd([]() {
+        simplePrintln("OTA update complete, rebooting");
+        setStatusLed(CRGB(0, 128, 0));
+    });
+
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+        static uint8_t lastPercent = 255;
+        uint8_t percent = total ? (progress * 100U) / total : 0;
+        if (percent != lastPercent && (percent == 0 || percent == 100 || (percent % 10) == 0)) {
+            simplePrintln("OTA progress: " + String(percent) + "%");
+            lastPercent = percent;
+        }
+    });
+
+    ArduinoOTA.onError([](ota_error_t error) {
+        String reason = "unknown";
+        switch (error) {
+            case OTA_AUTH_ERROR:    reason = "auth failed"; break;
+            case OTA_BEGIN_ERROR:   reason = "begin failed"; break;
+            case OTA_CONNECT_ERROR: reason = "connect failed"; break;
+            case OTA_RECEIVE_ERROR: reason = "receive failed"; break;
+            case OTA_END_ERROR:     reason = "end failed"; break;
+            default: break;
+        }
+        simplePrintln("OTA error: " + reason);
+        startAudioCaptureTask();
+        rtspServerEnabled = otaPreviousRtspEnabled;
+        resumeRtspServerAfterOtaFailure();
+        if (ledMode > 0) setStatusLed(CRGB(0, 0, 128));
+        else setStatusLed(CRGB(0, 0, 0));
+    });
+
+    ArduinoOTA.begin();
+    simplePrintln("OTA ready: pio run -e m5stack-atoms3-lite-ota -t upload");
+    simplePrintln("OTA target: " + networkHostname + ".local:" + String(OTA_PORT));
 }
 
 // Drain any pending data from RTSP client receive buffer
@@ -1634,8 +1705,11 @@ void setup() {
     if (MDNS.begin(networkHostname.c_str())) {
         MDNS.addService("rtsp", "tcp", 8554);
         MDNS.addService("http", "tcp", 80);
+        MDNS.addService("arduino", "tcp", OTA_PORT);
         simplePrintln("mDNS: " + networkHostname + ".local");
     }
+
+    setupArduinoOta();
 
     Serial.println("Setting up I2S driver...");
     setup_i2s_driver();
@@ -1705,6 +1779,7 @@ void setup() {
 
 void loop() {
     webui_handleClient();
+    ArduinoOTA.handle();
 
     if (millis() - lastTempCheck > 60000) { // 1 min
         checkTemperature();

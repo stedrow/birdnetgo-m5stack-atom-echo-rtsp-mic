@@ -129,6 +129,10 @@ Focus on signal conditioning:
 - Default CPU frequency lowered to 160MHz
 - Copy logs button in Web UI
 
+### v2.5.0
+- Restored Arduino OTA updates for direct PlatformIO uploads over Wi‑Fi
+- Added dual-slot OTA partition table and dedicated PlatformIO OTA environment
+
 ### v2.2.0
 - RTSP receive buffer drain on disconnect
 - Large RTSP session timeout (86400s)

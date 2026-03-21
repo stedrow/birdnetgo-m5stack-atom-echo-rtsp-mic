@@ -28,6 +28,15 @@ A high-quality RTSP audio streaming server for the **AtomS3 Lite + Unit Mini PDM
 pio run --target upload
 ```
 
+### 1a. Enable OTA uploads from PlatformIO
+After the first USB flash, the firmware exposes Arduino OTA on `atoms3mic.local:3232`, so you can push new builds directly over Wi‑Fi from PlatformIO:
+
+```bash
+pio run -e m5stack-atoms3-lite-ota -t upload
+```
+
+If you changed the device hostname, update `upload_port` in `platformio.ini` to match the new `.local` name or use the current IP address.
+
 ### 2. Connect to WiFi
 On first boot, connect to the `ESP32-RTSP-Mic-AP` access point and configure your WiFi. The LED turns **blue** when ready.
 
@@ -126,8 +135,11 @@ For Unit PDM wiring use **CLK=G1** and **DATA=G2**, plus GND and 3V3.
 ```bash
 pio run                      # Build
 pio run --target upload      # Flash
+pio run -e m5stack-atoms3-lite-ota -t upload # OTA upload over Wi-Fi
 pio device monitor -b 115200 # Serial monitor
 ```
+
+OTA uploads require the OTA-enabled partition table already included in this repo. The first flash still needs USB so the device can boot into the OTA-capable firmware once.
 
 ### Dependencies
 ```ini
