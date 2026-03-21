@@ -62,19 +62,14 @@
       border: 1px solid #21262d;
       border-radius: 8px;
       padding: 1rem 1.25rem;
-      margin-bottom: 2rem;
+      margin-bottom: 1.5rem;
       font-size: 0.85rem;
       color: #8b949e;
       line-height: 1.8;
     }
 
-    .steps ol {
-      padding-left: 1.2rem;
-    }
-
-    .steps li {
-      margin-bottom: 0.25rem;
-    }
+    .steps ol { padding-left: 1.2rem; }
+    .steps li { margin-bottom: 0.25rem; }
 
     .steps code {
       background: #161b22;
@@ -84,6 +79,59 @@
       font-size: 0.8rem;
       color: #79c0ff;
     }
+
+    .release-selector {
+      margin-bottom: 1.5rem;
+      text-align: left;
+    }
+
+    .release-selector label {
+      display: block;
+      font-size: 0.8rem;
+      color: #8b949e;
+      margin-bottom: 0.4rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .release-selector select {
+      width: 100%;
+      background: #0d1117;
+      color: #e6edf3;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 0.55rem 0.75rem;
+      font-size: 0.9rem;
+      cursor: pointer;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238b949e' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 0.75rem center;
+      padding-right: 2rem;
+    }
+
+    .release-selector select:focus {
+      outline: none;
+      border-color: #1f6feb;
+    }
+
+    .release-selector select:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .release-note {
+      font-size: 0.75rem;
+      color: #484f58;
+      margin-top: 0.4rem;
+    }
+
+    .release-note a {
+      color: #58a6ff;
+      text-decoration: none;
+    }
+
+    .release-note a:hover { text-decoration: underline; }
 
     .flash-btn {
       display: flex;
@@ -103,8 +151,11 @@
       transition: background 0.15s;
     }
 
-    esp-web-install-button::part(button):hover {
-      background: #2ea043;
+    esp-web-install-button::part(button):hover { background: #2ea043; }
+
+    esp-web-install-button[disabled]::part(button) {
+      opacity: 0.5;
+      cursor: not-allowed;
     }
 
     .browser-warning {
@@ -118,6 +169,21 @@
       color: #d1931a;
     }
 
+    .status {
+      font-size: 0.8rem;
+      color: #484f58;
+      margin-bottom: 1rem;
+      min-height: 1.2em;
+    }
+
+    .status.error { color: #f85149; }
+
+    .divider {
+      border: none;
+      border-top: 1px solid #21262d;
+      margin: 1.5rem 0;
+    }
+
     .info {
       font-size: 0.8rem;
       color: #484f58;
@@ -129,15 +195,7 @@
       text-decoration: none;
     }
 
-    .info a:hover {
-      text-decoration: underline;
-    }
-
-    .divider {
-      border: none;
-      border-top: 1px solid #21262d;
-      margin: 1.5rem 0;
-    }
+    .info a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -150,13 +208,14 @@
     </p>
 
     <div class="browser-warning" id="browserWarning">
-      ⚠️ WebSerial is only supported in <strong>Chrome</strong> or <strong>Edge</strong> on desktop.
+      WebSerial is only supported in <strong>Chrome</strong> or <strong>Edge</strong> on desktop.
       Please open this page in Chrome to flash your device.
     </div>
 
     <div class="steps">
       <ol>
         <li>Connect your Atom Echo via USB</li>
+        <li>Select a firmware release below</li>
         <li>Click <strong>Install</strong> and select the serial port</li>
         <li>Wait for flashing to complete (~30 seconds)</li>
         <li>Connect to <code>ESP32-RTSP-Mic-AP</code> to configure WiFi</li>
@@ -164,25 +223,115 @@
       </ol>
     </div>
 
+    <div class="release-selector">
+      <label for="releaseSelect">Firmware release</label>
+      <select id="releaseSelect" disabled>
+        <option>Loading releases…</option>
+      </select>
+      <p class="release-note" id="releaseNote">&nbsp;</p>
+    </div>
+
+    <p class="status" id="status"></p>
+
     <div class="flash-btn">
-      <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
+      <esp-web-install-button id="installBtn" manifest=""></esp-web-install-button>
     </div>
 
     <hr class="divider">
 
     <p class="info">
-      Flashes the latest release from
-      <a href="https://github.com/stedrow/birdnetgo-m5stack-atom-echo-rtsp-mic/releases/latest" target="_blank">GitHub Releases</a>.
+      <a href="https://github.com/stedrow/birdnetgo-m5stack-atom-echo-rtsp-mic/releases" target="_blank">All releases</a>
       &nbsp;·&nbsp;
       <a href="https://github.com/stedrow/birdnetgo-m5stack-atom-echo-rtsp-mic" target="_blank">Source on GitHub</a>
     </p>
   </div>
 
   <script>
-    // Show warning if WebSerial is not available (non-Chrome browser)
+    const REPO = 'stedrow/birdnetgo-m5stack-atom-echo-rtsp-mic';
+    const API  = `https://api.github.com/repos/${REPO}/releases`;
+    const DL   = (tag, file) =>
+      `https://github.com/${REPO}/releases/download/${tag}/${file}`;
+
+    const select     = document.getElementById('releaseSelect');
+    const installBtn = document.getElementById('installBtn');
+    const status     = document.getElementById('status');
+    const noteEl     = document.getElementById('releaseNote');
+
+    let manifestBlobUrl = null;
+
+    function buildManifest(tag) {
+      return {
+        name: 'Atom Echo RTSP Mic for BirdNET-Go',
+        version: tag,
+        new_install_prompt_erase: true,
+        builds: [{
+          chipFamily: 'ESP32',
+          parts: [
+            { path: DL(tag, 'bootloader.bin'), offset: 4096  },
+            { path: DL(tag, 'partitions.bin'), offset: 32768 },
+            { path: DL(tag, 'boot_app0.bin'),  offset: 57344 },
+            { path: DL(tag, 'firmware.bin'),   offset: 65536 },
+          ]
+        }]
+      };
+    }
+
+    function setRelease(tag, publishedAt) {
+      if (manifestBlobUrl) URL.revokeObjectURL(manifestBlobUrl);
+      const blob = new Blob([JSON.stringify(buildManifest(tag))], { type: 'application/json' });
+      manifestBlobUrl = URL.createObjectURL(blob);
+      installBtn.setAttribute('manifest', manifestBlobUrl);
+
+      const date = new Date(publishedAt).toLocaleDateString(undefined, {
+        year: 'numeric', month: 'short', day: 'numeric'
+      });
+      noteEl.innerHTML = `Released ${date} &nbsp;·&nbsp; <a href="https://github.com/${REPO}/releases/tag/${tag}" target="_blank">Release notes</a>`;
+      status.textContent = '';
+    }
+
+    async function loadReleases() {
+      try {
+        const resp = await fetch(API);
+        if (!resp.ok) throw new Error(`GitHub API ${resp.status}`);
+        const releases = await resp.json();
+
+        if (!releases.length) {
+          status.textContent = 'No releases published yet.';
+          status.className = 'status error';
+          return;
+        }
+
+        select.innerHTML = '';
+        releases.forEach(r => {
+          const opt = document.createElement('option');
+          opt.value = JSON.stringify({ tag: r.tag_name, date: r.published_at });
+          opt.textContent = r.prerelease
+            ? `${r.tag_name} (pre-release)`
+            : r.tag_name;
+          select.appendChild(opt);
+        });
+
+        select.disabled = false;
+        const first = releases[0];
+        setRelease(first.tag_name, first.published_at);
+
+      } catch (err) {
+        select.innerHTML = '<option>Failed to load releases</option>';
+        status.textContent = `Could not fetch releases: ${err.message}`;
+        status.className = 'status error';
+      }
+    }
+
+    select.addEventListener('change', () => {
+      const { tag, date } = JSON.parse(select.value);
+      setRelease(tag, date);
+    });
+
     if (!navigator.serial) {
       document.getElementById('browserWarning').style.display = 'block';
     }
+
+    loadReleases();
   </script>
 </body>
 </html>
