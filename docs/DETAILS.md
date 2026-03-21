@@ -2,17 +2,16 @@
 
 ## Hardware
 
-- **Board**: M5Stack Atom Echo (ESP32-PICO-D4)
-- **Microphone**: SPM1423 PDM MEMS (built-in)
+- **Board**: AtomS3 Lite
+- **Microphone**: Unit Mini PDM
 - **Audio**: 16-bit PCM, 16kHz mono (configurable 8–48kHz)
 - **Streaming**: RTSP/RTP over TCP, port 8554
 
 ### Pin Configuration
 ```cpp
-I2S_CLK_PIN     = 33  // Microphone clock
-I2S_DATA_IN_PIN = 23  // Microphone data
-WS2812_LED_PIN  = 27  // Built-in RGB LED
-// G19 / G22 / G23 / G33 are reserved by the Atom Echo audio path
+I2S_CLK_PIN     = 1   // PDM clock (G1)
+I2S_DATA_IN_PIN = 2   // PDM data (G2)
+WS2812_LED_PIN  = 35  // Built-in RGB LED
 ```
 
 ## Architecture

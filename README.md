@@ -1,6 +1,6 @@
-# Atom Echo — RTSP Microphone for BirdNET-Go
+# AtomS3 Lite + Unit Mini PDM — RTSP Microphone for BirdNET-Go
 
-A high-quality RTSP audio streaming server for the **M5Stack Atom Echo**, streaming live audio to [BirdNET-Go](https://github.com/tphakala/birdnet-go) or any RTSP-compatible client.
+A high-quality RTSP audio streaming server for the **AtomS3 Lite + Unit Mini PDM**, streaming live audio to [BirdNET-Go](https://github.com/tphakala/birdnet-go) or any RTSP-compatible client.
 
 <p align="left">
   <img src="https://shop.m5stack.com/cdn/shop/files/3_e4ea519e-765f-4f30-aad1-7855ff9f8744_1200x1200.jpg" alt="M5Stack Atom Echo" width="300">
@@ -49,8 +49,8 @@ This firmware currently supports **RTSP interleaved over TCP** only. If VLC is u
 
 | Setting | Default | Notes |
 |---------|---------|-------|
-| Sample Rate | 16000 Hz | Good baseline for the Atom Echo microphone |
-| Gain | 1.0x | Safer baseline for the Atom Echo’s hot PDM capsule; raise only if the meter stays low |
+| Sample Rate | 16000 Hz | Optimal for Unit Mini PDM |
+| Gain | 1.0x | Conservative baseline to keep the PDM capsule out of constant hiss/clipping |
 | AGC | OFF | Enable for varying bird distances |
 | High-Pass | ON, 450 Hz | Reduces rumble and low-frequency room boom |
 | Buffer | 2048 samples | 128ms latency, more tolerant of VLC / weak Wi‑Fi |
@@ -118,7 +118,7 @@ Interpretation tip for raw counters:
 - A non-zero `i2s_raw_rms` with close `i2s_raw_min`/`i2s_raw_max` can indicate strong DC bias and low AC amplitude.
 - This is a signal-conditioning issue (gain/AGC/HPF tuning), not a transport/network failure.
 
-The Atom Echo uses the built-in microphone wiring: **MIC CLK=G33** and **MIC DATA=G23**. Do not reuse **G19/G22/G23/G33** because they are shared with the on-board speaker/mic circuit.
+For Unit PDM wiring use **CLK=G1** and **DATA=G2**, plus GND and 3V3.
 
 ## Building
 
@@ -143,5 +143,5 @@ lib_deps =
 
 This project is largely based on [birdnetgo-esp32-rtsp-mic](https://github.com/Sukecz/birdnetgo-esp32-rtsp-mic) by [@Sukecz](https://github.com/Sukecz) — thank you for the excellent foundation!
 
-- M5Stack for Atom Echo hardware
+- M5Stack for AtomS3 Lite and Unit Mini PDM hardware
 - [BirdNET-Go](https://github.com/tphakala/birdnet-go) community

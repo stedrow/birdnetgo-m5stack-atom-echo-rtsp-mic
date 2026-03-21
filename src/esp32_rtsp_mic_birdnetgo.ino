@@ -30,7 +30,7 @@ volatile bool core1OwnsLED = false;          // LED ownership flag
 const char* FW_VERSION_STR = FW_VERSION;
 
 // -- DEFAULT PARAMETERS (configurable via Web UI / API)
-#define DEFAULT_SAMPLE_RATE 16000  // Atom Echo / BirdNET-Go preferred rate
+#define DEFAULT_SAMPLE_RATE 16000  // Unit Mini PDM / BirdNET-Go preferred rate
 #define DEFAULT_GAIN_FACTOR 1.0f
 #define DEFAULT_BUFFER_SIZE 2048   // 128ms @ 16kHz - safer default for VLC / weaker WiFi links
 #define DEFAULT_WIFI_TX_DBM 19.5f  // Default WiFi TX power in dBm
@@ -46,12 +46,11 @@ const char* FW_VERSION_STR = FW_VERSION;
 #define OVERHEAT_MAX_LIMIT_C 95
 #define OVERHEAT_LIMIT_STEP_C 5
 
-// -- Pins (M5 Atom Echo)
-// Official Atom Echo pin map: MIC CLK=G33, MIC DATA=G23, RGB LED=G27.
-// Speaker/I2S pins G19/G22 are reserved by the on-board amplifier and must not be reused.
-#define I2S_CLK_PIN     33  // PDM MIC CLK
-#define I2S_DATA_IN_PIN 23  // PDM MIC DATA
-#define WS2812_LED_PIN  27  // Atom Echo built-in RGB LED
+// -- Pins (AtomS3 Lite + Unit Mini PDM)
+// M5's reference wiring for the PDM Unit is CLK=G1 and DATA=G2.
+#define I2S_CLK_PIN      1  // PDM CLK (G1)
+#define I2S_DATA_IN_PIN  2  // PDM DATA (G2)
+#define WS2812_LED_PIN  35  // AtomS3 Lite built-in RGB LED
 
 static CRGB statusLed[1];
 
@@ -88,10 +87,10 @@ bool rtspServerEnabled = true;
 uint32_t currentSampleRate = DEFAULT_SAMPLE_RATE;
 float currentGainFactor = DEFAULT_GAIN_FACTOR;
 uint16_t currentBufferSize = DEFAULT_BUFFER_SIZE;
-// PDM microphones (like SPM1423 on Atom Echo) output decimated samples
+// PDM microphones output decimated samples directly
 // The hardware PDM decimation produces samples already close to correct range
 // Typical range: 0-3 for PDM vs 11-13 for I2S microphones
-uint8_t i2sShiftBits = 0;  // Fixed for Atom Echo PDM capture
+uint8_t i2sShiftBits = 0;  // Fixed for Unit Mini PDM capture
 
 // -- Audio metering / clipping diagnostics
 uint16_t lastPeakAbs16 = 0;       // last block peak absolute value (0..32767)
@@ -618,7 +617,7 @@ void resetToDefaultSettings() {
     currentSampleRate = DEFAULT_SAMPLE_RATE;
     currentGainFactor = DEFAULT_GAIN_FACTOR;
     currentBufferSize = DEFAULT_BUFFER_SIZE;
-    i2sShiftBits = 0;  // Fixed for Atom Echo PDM capture
+    i2sShiftBits = 0;  // Fixed for Unit Mini PDM capture
 
     autoRecoveryEnabled = false;
     autoThresholdEnabled = true;
@@ -1180,7 +1179,7 @@ bool requestStreamStop(const char* reason) {
     }
 }
 
-// I2S setup for Atom Echo built-in PDM microphone
+// I2S setup for AtomS3 Lite + Unit Mini PDM (PDM microphone mode)
 void setup_i2s_driver() {
     i2s_driver_uninstall(I2S_NUM_0);
 
@@ -1188,11 +1187,11 @@ void setup_i2s_driver() {
     uint16_t dma_buf_len = 60;
 
     i2s_config_t i2s_config = {
-        // PDM mode for Atom Echo built-in microphone
+        // PDM mode for Unit Mini PDM microphone
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM),
         .sample_rate = currentSampleRate,
         .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,  // Match original demo exactly
-        .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,    // Atom Echo microphone is wired as mono on the left channel
+        .channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT,   // Match M5 reference PDM example
 #if ESP_IDF_VERSION > ESP_IDF_VERSION_VAL(4, 1, 0)
         .communication_format = I2S_COMM_FORMAT_STAND_I2S,
 #else
@@ -1473,7 +1472,7 @@ void setup() {
     Serial.begin(115200);
     delay(500);
     Serial.println("\n\n=== ESP32 RTSP Mic Starting ===");
-    Serial.println("Board: M5Stack Atom Echo");
+    Serial.println("Board: M5Stack AtomS3 Lite");
 
     // Create task exit semaphore for confirmed Core 1 task shutdown
     taskExitSemaphore = xSemaphoreCreateBinary();
