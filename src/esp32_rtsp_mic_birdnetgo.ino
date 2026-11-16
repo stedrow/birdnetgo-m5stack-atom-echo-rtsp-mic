@@ -1314,6 +1314,11 @@ void setup() {
     // Note: Audio buffers now allocated by Core 1 task (not in main)
     Serial.println("Audio buffers will be allocated by Core 1 pipeline task");
 
+    // Set the CPU frequency before WiFi configuration to avoid a disconnect loop.
+    // See https://github.com/espressif/arduino-esp32/issues/7240#issuecomment-1246871886
+    setCpuFrequencyMhz(cpuFrequencyMhz);
+    simplePrintln("CPU frequency set to " + String(cpuFrequencyMhz) + " MHz for optimal thermal/performance balance");
+
     // WiFi optimization for stable streaming
     Serial.println("Initializing WiFi...");
     WiFi.setSleep(false);
@@ -1402,9 +1407,6 @@ void setup() {
         persistOverheatNote();
         simplePrintln("WARNING: Temperature sensor unavailable at startup. Thermal protection paused.");
     }
-
-    setCpuFrequencyMhz(cpuFrequencyMhz);
-    simplePrintln("CPU frequency set to " + String(cpuFrequencyMhz) + " MHz for optimal thermal/performance balance");
 
     if (!overheatLatched) {
         simplePrintln("RTSP server ready on port 8554");
